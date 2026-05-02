@@ -1,0 +1,8 @@
+Jeronimo Dé R10 - Checklist mínima
+1. Backend local: backend/scripts/start_local.ps1
+2. App local: client_flutter/scripts/prepare_platforms.ps1 y luego flutter run -d windows o flutter run -d edge.
+3. Railway: crear proyecto separado, agregar PostgreSQL, cargar variables de backend/.env.railway.example y desplegar backend/.
+4. Windows release: client_flutter/scripts/build_windows.ps1
+5. Web/PWA release: client_flutter/scripts/build_web.ps1
+6. Android APK: client_flutter/scripts/build_android_apk.ps1
+7. Backup común: Configuración avanzada > Copiar respaldo JSON.

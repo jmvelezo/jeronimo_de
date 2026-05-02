@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+backend/data/
+.DS_Store
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
