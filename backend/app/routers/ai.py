@@ -279,6 +279,23 @@ def _sum_expenses_by_category(expenses: list[Expense]) -> list[dict]:
     ]
 
 
+def _jsonable(value):
+    """Convierte modelos Pydantic/SQLModel o dicts anidados a datos JSON seguros para IA."""
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, tuple):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    return value
+
+
 def build_household_ai_payload(session: Session, household_id: int, month: str, focus: str) -> dict:
     summary = build_month_summary(month, household_id, session)
     expenses = session.exec(select(Expense).where(Expense.household_id == household_id, Expense.month == month)).all()
@@ -291,9 +308,9 @@ def build_household_ai_payload(session: Session, household_id: int, month: str, 
         "focus": focus,
         "currency": "ARS",
         "country_context": "Argentina",
-        "summary": summary.model_dump(mode="json"),
+        "summary": _jsonable(summary),
         "expenses_by_category": _sum_expenses_by_category(expenses),
-        "active_debts": [debt_to_read(session, debt).model_dump(mode="json") for debt in debts],
+        "active_debts": [_jsonable(debt_to_read(session, debt)) for debt in debts],
         "task_summary": {
             "pending_count": len(task_reads),
             "overdue_count": len([task for task in task_reads if task.is_overdue]),
@@ -401,7 +418,7 @@ def create_household_report(payload: AiReportCreate, current_member: Member = De
         month=payload.month,
         title=title,
         content=content,
-        evidence_json=json.dumps(evidence, ensure_ascii=False),
+        evidence_json=json.dumps(evidence, ensure_ascii=False, default=str),
         created_by_member_id=current_member.id or 0,
     )
     session.add(report)
