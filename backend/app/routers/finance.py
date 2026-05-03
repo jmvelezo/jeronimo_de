@@ -251,7 +251,10 @@ def build_month_summary(month: str, household_id: int, session: Session) -> Mont
             MonthlyAdvancePayment.status == PaymentStatus.confirmed,
         )
     ).all()
-    return calculate_month_summary(month, members, incomes, expenses, participations, advance_payments)
+    summary = calculate_month_summary(month, members, incomes, expenses, participations, advance_payments)
+    if isinstance(summary, MonthSummary):
+        return summary
+    return MonthSummary.model_validate(summary)
 
 
 def participation_to_read(member: Member, row: MonthlyParticipation | None, month: str) -> MemberParticipationRead:
