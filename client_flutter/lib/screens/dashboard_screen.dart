@@ -37,6 +37,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   HouseholdTaskSummary? taskSummary;
   HouseholdPeriodSettingsItem? periodSettings;
   List<MonthlyAdvancePaymentItem> advancePayments = [];
+  List<CreditBalanceItem> creditBalances = [];
   AiWeeklyReportResult? weeklyAi;
   bool weeklyAiLoading = false;
   String? weeklyAiMessage;
@@ -76,6 +77,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       } catch (_) {
         loadedAdvancePayments = [];
       }
+      List<CreditBalanceItem> loadedCreditBalances = [];
+      try {
+        loadedCreditBalances = await widget.api.getCreditBalances(activeOnly: true);
+      } catch (_) {
+        loadedCreditBalances = [];
+      }
       HouseholdTaskSummary? loadedTaskSummary;
       try {
         loadedTaskSummary = await widget.api.getTaskSummary();
@@ -111,6 +118,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         weeklyAiMessage = loadedWeeklyAi?.message;
         periodSettings = loadedPeriod;
         advancePayments = loadedAdvancePayments;
+        creditBalances = loadedCreditBalances;
         lastSuccessfulSync = last;
         offlineMode = false;
         syncMessage = "Sincronizado con el hogar compartido.";
@@ -125,6 +133,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           summary = cached.summary;
           taskSummary = cached.taskSummary;
           advancePayments = [];
+          creditBalances = [];
           lastSuccessfulSync = cached.savedAt;
           offlineMode = true;
           syncMessage = "Sin conexión. Mostrando la última información sincronizada.";
@@ -168,6 +177,54 @@ class _DashboardScreenState extends State<DashboardScreen> {
     } finally {
       if (mounted) setState(() => weeklyAiLoading = false);
     }
+  }
+
+
+  double get _myAvailableCreditBalance {
+    return creditBalances
+        .where((item) => item.ownerMemberId == widget.session.member.id && item.status == 'available' && item.remainingAmount > 0.01)
+        .fold<double>(0.0, (total, item) => total + item.remainingAmount);
+  }
+
+  Widget _creditBalanceChip(double amount, {bool compact = false}) {
+    if (amount <= 0.01) return const SizedBox.shrink();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(compact ? 0.12 : 0.16),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withOpacity(0.18)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(color: Colors.white.withOpacity(0.16), borderRadius: BorderRadius.circular(14)),
+            child: const Icon(Icons.savings_outlined, color: Colors.white, size: 19),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Crédito disponible: ${money.format(amount)}',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Se conserva para próximas deudas o podés aplicarlo desde Deudas y abonos.',
+                  style: TextStyle(color: Colors.white.withOpacity(0.78), fontWeight: FontWeight.w700, fontSize: 11, height: 1.25),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   bool _isParticipating(int memberId) {
@@ -427,6 +484,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             'Si cerrás hoy: ${balanceLabel.toLowerCase()} ${money.format((mySummary?.balance ?? 0).abs())}. Te correspondía ${money.format(myExpected)} y pagaste ${money.format(myPaid)}.',
             style: TextStyle(color: Colors.white.withOpacity(0.86), height: 1.3, fontWeight: FontWeight.w600),
           ),
+          if (_myAvailableCreditBalance > 0.01) ...[
+            const SizedBox(height: 12),
+            _creditBalanceChip(_myAvailableCreditBalance),
+          ],
           const SizedBox(height: 16),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1018,6 +1079,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ],
               ),
             ),
+            if (_myAvailableCreditBalance > 0.01) ...[
+              const SizedBox(height: 12),
+              AppCard(
+                padding: const EdgeInsets.all(14),
+                color: kPrimary.withOpacity(0.08),
+                border: Border.all(color: kPrimary.withOpacity(0.14)),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(color: kPrimarySoft, borderRadius: BorderRadius.circular(14)),
+                      child: const Icon(Icons.savings_outlined, color: kPrimary, size: 20),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Saldo a favor confirmado', style: TextStyle(color: kInk, fontWeight: FontWeight.w900, fontSize: 15)),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Tenés ${money.format(_myAvailableCreditBalance)} disponibles como crédito. No forma parte del saldo provisorio del período hasta que lo apliques a una deuda.',
+                            style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, height: 1.25),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             const Text('Pagos anticipados del período', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
             const SizedBox(height: 6),
