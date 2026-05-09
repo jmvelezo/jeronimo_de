@@ -139,25 +139,18 @@ class _DebtsScreenState extends State<DebtsScreen> {
               ),
               const SizedBox(height: 14),
               if (myCredits.isNotEmpty) ...[
-                const SectionTitle(title: 'Saldos a favor', subtitle: 'Créditos ya confirmados que podés aplicar a deudas con la misma persona.', icon: Icons.savings_outlined),
+                const SectionTitle(title: 'Saldos a favor', subtitle: 'Créditos confirmados que podés conservar o aplicar a deudas compatibles.', icon: Icons.savings_outlined),
                 for (final credit in myCredits) ...[
-                  AppCard(
-                    child: Row(
-                      children: [
-                        const Icon(Icons.savings_rounded, color: kPrimary),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('${money.format(credit.remainingAmount)} a favor con ${_memberName(credit.counterpartyMemberId)}', style: const TextStyle(fontWeight: FontWeight.w900)),
-                              Text(credit.reason, style: const TextStyle(color: Colors.black54, fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                        OutlinedButton(onPressed: () => _showApplyCreditSheet(credit), child: const Text('Aplicar')),
-                      ],
-                    ),
+                  Builder(
+                    builder: (context) {
+                      final eligibleDebts = _eligibleDebtsForCredit(credit);
+                      return _CreditBalanceCard(
+                        title: '${money.format(credit.remainingAmount)} a favor con ${_memberName(credit.counterpartyMemberId)}',
+                        reason: credit.reason,
+                        compatibleDebtCount: eligibleDebts.length,
+                        onApply: eligibleDebts.isEmpty ? null : () => _showApplyCreditSheet(credit),
+                      );
+                    },
                   ),
                   const SizedBox(height: 10),
                 ],
@@ -398,12 +391,22 @@ class _DebtsScreenState extends State<DebtsScreen> {
     }
   }
 
-  Future<void> _showApplyCreditSheet(CreditBalanceItem credit) async {
-    final eligible = debts
-        .where((d) => (d.status == 'active' || d.status == 'partial') && d.debtorMemberId == credit.ownerMemberId && d.creditorMemberId == credit.counterpartyMemberId && d.remainingAmount > 0.01)
+  List<DebtItem> _eligibleDebtsForCredit(CreditBalanceItem credit) {
+    return debts
+        .where((d) =>
+            (d.status == 'active' || d.status == 'partial') &&
+            d.debtorMemberId == credit.ownerMemberId &&
+            d.creditorMemberId == credit.counterpartyMemberId &&
+            d.remainingAmount > 0.01)
         .toList();
+  }
+
+  Future<void> _showApplyCreditSheet(CreditBalanceItem credit) async {
+    final eligible = _eligibleDebtsForCredit(credit);
     if (eligible.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No hay deudas activas compatibles para aplicar este saldo.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No hay deudas activas compatibles. El saldo queda disponible para próximos períodos.')),
+      );
       return;
     }
     DebtItem selected = eligible.first;
@@ -420,11 +423,19 @@ class _DebtsScreenState extends State<DebtsScreen> {
             children: [
               const Text('Aplicar saldo a favor', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
-              Text('Disponible: ${money.format(credit.remainingAmount)}'),
+              Text(
+                'Disponible: ${money.format(credit.remainingAmount)}. Podés usarlo total o parcialmente para compensar una deuda activa con ${_memberName(credit.counterpartyMemberId)}.',
+                style: const TextStyle(color: Colors.black54, height: 1.25),
+              ),
               const SizedBox(height: 14),
               DropdownButtonFormField<DebtItem>(
                 value: selected,
-                items: eligible.map((d) => DropdownMenuItem(value: d, child: Text('Deuda #${d.id} · pendiente ${money.format(d.remainingAmount)}'))).toList(),
+                items: eligible
+                    .map((d) => DropdownMenuItem(
+                          value: d,
+                          child: Text('Deuda #${d.id} · pendiente ${money.format(d.remainingAmount)}'),
+                        ))
+                    .toList(),
                 onChanged: (value) {
                   if (value == null) return;
                   setModalState(() {
@@ -435,25 +446,44 @@ class _DebtsScreenState extends State<DebtsScreen> {
                 decoration: const InputDecoration(labelText: 'Deuda a compensar'),
               ),
               const SizedBox(height: 10),
-              TextField(controller: amountController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Monto a aplicar')),
+              TextField(
+                controller: amountController,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: 'Monto a aplicar',
+                  helperText: 'Máximo: ${money.format(credit.remainingAmount.clamp(0, selected.remainingAmount))}',
+                ),
+              ),
               const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: () async {
-                  try {
-                    await widget.api.applyCreditBalance(
-                      creditId: credit.id,
-                      debtId: selected.id,
-                      amount: _parseMoney(amountController.text),
-                      note: 'Compensación desde saldo a favor',
-                    );
-                    if (mounted) Navigator.pop(context);
-                    await _refresh();
-                    if (widget.onChanged != null) await widget.onChanged!();
-                  } catch (e) {
-                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
-                  }
-                },
-                child: const Text('Aplicar saldo'),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.swap_horiz_rounded),
+                  onPressed: () async {
+                    try {
+                      final amount = _parseMoney(amountController.text);
+                      final maxAmount = credit.remainingAmount.clamp(0, selected.remainingAmount).toDouble();
+                      if (amount > maxAmount + 0.01) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('El monto máximo aplicable es ${money.format(maxAmount)}.')),
+                        );
+                        return;
+                      }
+                      await widget.api.applyCreditBalance(
+                        creditId: credit.id,
+                        debtId: selected.id,
+                        amount: amount,
+                        note: 'Compensación desde saldo a favor',
+                      );
+                      if (mounted) Navigator.pop(context);
+                      await _refresh();
+                      if (widget.onChanged != null) await widget.onChanged!();
+                    } catch (e) {
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+                    }
+                  },
+                  label: const Text('Aplicar saldo'),
+                ),
               ),
             ],
           ),
@@ -470,6 +500,141 @@ class _DebtsScreenState extends State<DebtsScreen> {
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
     }
+  }
+}
+
+class _CreditBalanceCard extends StatelessWidget {
+  final String title;
+  final String reason;
+  final int compatibleDebtCount;
+  final VoidCallback? onApply;
+
+  const _CreditBalanceCard({
+    required this.title,
+    required this.reason,
+    required this.compatibleDebtCount,
+    required this.onApply,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasCompatibleDebts = compatibleDebtCount > 0;
+    final statusText = hasCompatibleDebts
+        ? compatibleDebtCount == 1
+            ? 'Tenés 1 deuda compatible para compensar.'
+            : 'Tenés $compatibleDebtCount deudas compatibles para compensar.'
+        : 'Se conserva para próximas deudas con esta persona.';
+
+    final textBlock = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          title,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          softWrap: true,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          reason.isEmpty ? 'Saldo confirmado disponible.' : reason,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          softWrap: true,
+          style: const TextStyle(color: Colors.black54, fontSize: 12, height: 1.25),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: hasCompatibleDebts ? kPrimary.withOpacity(0.08) : Colors.black.withOpacity(0.04),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: hasCompatibleDebts ? kPrimary.withOpacity(0.18) : Colors.black.withOpacity(0.06)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                hasCompatibleDebts ? Icons.check_circle_outline_rounded : Icons.schedule_rounded,
+                size: 15,
+                color: hasCompatibleDebts ? kPrimary : Colors.black54,
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  statusText,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: hasCompatibleDebts ? kPrimary : Colors.black54,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    height: 1.15,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    final applyButton = OutlinedButton.icon(
+      onPressed: onApply,
+      icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+      label: const Text('Aplicar a deuda'),
+    );
+
+    return AppCard(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth <= 560;
+          final icon = Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: kPrimary.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: const Icon(Icons.savings_rounded, color: kPrimary),
+          );
+
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    icon,
+                    const SizedBox(width: 12),
+                    Expanded(child: textBlock),
+                  ],
+                ),
+                if (hasCompatibleDebts) ...[
+                  const SizedBox(height: 12),
+                  Align(alignment: Alignment.centerLeft, child: applyButton),
+                ],
+              ],
+            );
+          }
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              icon,
+              const SizedBox(width: 12),
+              Expanded(child: textBlock),
+              if (hasCompatibleDebts) ...[
+                const SizedBox(width: 12),
+                Flexible(flex: 0, child: applyButton),
+              ],
+            ],
+          );
+        },
+      ),
+    );
   }
 }
 
