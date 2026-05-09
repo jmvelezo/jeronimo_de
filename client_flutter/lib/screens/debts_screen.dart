@@ -518,121 +518,113 @@ class _CreditBalanceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasCompatibleDebts = compatibleDebtCount > 0;
+    final hasCompatibleDebts = compatibleDebtCount > 0 && onApply != null;
+    final safeTitle = title.trim().isEmpty ? 'Saldo disponible' : title.trim();
+    final safeReason = reason.trim().isEmpty ? 'Saldo confirmado disponible.' : reason.trim();
     final statusText = hasCompatibleDebts
         ? compatibleDebtCount == 1
             ? 'Tenés 1 deuda compatible para compensar.'
             : 'Tenés $compatibleDebtCount deudas compatibles para compensar.'
         : 'Se conserva para próximas deudas con esta persona.';
 
-    final textBlock = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          title,
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
-          softWrap: true,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          reason.isEmpty ? 'Saldo confirmado disponible.' : reason,
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
-          softWrap: true,
-          style: const TextStyle(color: Colors.black54, fontSize: 12, height: 1.25),
-        ),
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-          decoration: BoxDecoration(
-            color: hasCompatibleDebts ? kPrimary.withOpacity(0.08) : Colors.black.withOpacity(0.04),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: hasCompatibleDebts ? kPrimary.withOpacity(0.18) : Colors.black.withOpacity(0.06)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                hasCompatibleDebts ? Icons.check_circle_outline_rounded : Icons.schedule_rounded,
-                size: 15,
-                color: hasCompatibleDebts ? kPrimary : Colors.black54,
-              ),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  statusText,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: hasCompatibleDebts ? kPrimary : Colors.black54,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                    height: 1.15,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
+    final iconBox = Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: kPrimary.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: const Icon(Icons.savings_rounded, color: kPrimary),
     );
 
-    final applyButton = OutlinedButton.icon(
-      onPressed: onApply,
-      icon: const Icon(Icons.swap_horiz_rounded, size: 18),
-      label: const Text('Aplicar a deuda'),
+    final statusBox = Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: hasCompatibleDebts ? kPrimary.withOpacity(0.08) : Colors.black.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: hasCompatibleDebts ? kPrimary.withOpacity(0.18) : Colors.black.withOpacity(0.06)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            hasCompatibleDebts ? Icons.check_circle_outline_rounded : Icons.schedule_rounded,
+            size: 17,
+            color: hasCompatibleDebts ? kPrimary : Colors.black54,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              statusText,
+              softWrap: true,
+              style: TextStyle(
+                color: hasCompatibleDebts ? kPrimary : Colors.black54,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+                height: 1.22,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
 
     return AppCard(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final compact = constraints.maxWidth <= 560;
-          final icon = Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: kPrimary.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: const Icon(Icons.savings_rounded, color: kPrimary),
-          );
-
-          if (compact) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              iconBox,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    icon,
-                    const SizedBox(width: 12),
-                    Expanded(child: textBlock),
+                    Text(
+                      safeTitle,
+                      softWrap: true,
+                      style: const TextStyle(
+                        color: Colors.black87,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        height: 1.18,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      safeReason,
+                      softWrap: true,
+                      style: const TextStyle(
+                        color: Colors.black54,
+                        fontSize: 12.5,
+                        height: 1.25,
+                      ),
+                    ),
                   ],
                 ),
-                if (hasCompatibleDebts) ...[
-                  const SizedBox(height: 12),
-                  Align(alignment: Alignment.centerLeft, child: applyButton),
-                ],
-              ],
-            );
-          }
-
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              icon,
-              const SizedBox(width: 12),
-              Expanded(child: textBlock),
-              if (hasCompatibleDebts) ...[
-                const SizedBox(width: 12),
-                Flexible(flex: 0, child: applyButton),
-              ],
+              ),
             ],
-          );
-        },
+          ),
+          const SizedBox(height: 12),
+          statusBox,
+          if (hasCompatibleDebts) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: onApply,
+                icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+                label: const Text('Aplicar a deuda'),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
