@@ -118,8 +118,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
       builder: (context) => AlertDialog(
         title: Text('Reiniciar ${widget.currentMonth}'),
         content: Text(
-          'Esto deja en cero ingresos y gastos comunes de ${widget.currentMonth}. '
-          'No toca meses cerrados, deudas, abonos, saldos a favor, pagos anticipados ni plantillas.\n\n'
+          'Esto deja en cero ingresos, gastos comunes y pagos anticipados de ${widget.currentMonth}. '
+          'No toca meses cerrados, deudas formales, abonos de deudas, saldos a favor ni plantillas.\n\n'
           'Usalo solo si este período quedó contaminado con datos del mes anterior o de pruebas.',
         ),
         actions: [
@@ -142,8 +142,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
         final month = result['month'] ?? widget.currentMonth;
         final deletedIncomes = result['deleted_incomes'] ?? 0;
         final deletedExpenses = result['deleted_expenses'] ?? 0;
+        final deletedAdvancePayments = result['deleted_advance_payments'] ?? 0;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$month reiniciado: $deletedIncomes ingresos y $deletedExpenses gastos eliminados.')),
+          SnackBar(content: Text('$month reiniciado: $deletedIncomes ingresos, $deletedExpenses gastos y $deletedAdvancePayments pagos anticipados eliminados.')),
         );
       }
     } catch (e) {
@@ -210,7 +211,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   const SizedBox(height: 8),
                   const Text('El cierre protege el mes contra cambios accidentales. Si pasás al siguiente período, ingresos y gastos arrancan vacíos sin borrar el historial.'),
                   const SizedBox(height: 6),
-                  const Text('Reiniciar período activo solo vacía ingresos y gastos del período actual no cerrado. No toca deudas, abonos ni saldos a favor.'),
+                  const Text('Reiniciar período activo vacía ingresos, gastos y pagos anticipados del período actual no cerrado. No toca meses cerrados, deudas formales, abonos de deudas ni saldos a favor.'),
                 ],
               ),
             ),

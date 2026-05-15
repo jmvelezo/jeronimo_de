@@ -295,6 +295,7 @@ class ActivePeriodResetRead(BaseModel):
     month: str
     deleted_incomes: int = 0
     deleted_expenses: int = 0
+    deleted_advance_payments: int = 0
     message: str = ""
 
 

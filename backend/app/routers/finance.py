@@ -1212,9 +1212,9 @@ def reset_active_period_basic(
     current_member: Member = Depends(get_current_member),
     session: Session = Depends(get_session),
 ):
-    """Vacía solo ingresos y gastos del período activo no cerrado.
+    """Vacía ingresos, gastos y pagos anticipados del período activo no cerrado.
 
-    No toca cierres, deudas, abonos, saldos a favor, pagos anticipados ni plantillas.
+    No toca cierres, deudas formales, abonos de deudas, saldos a favor ni plantillas.
     Se usa para limpiar un período operativo contaminado por datos previos/pruebas.
     """
     ensure_operator(current_member)
@@ -1235,12 +1235,21 @@ def reset_active_period_basic(
             Expense.month == active_month,
         )
     ).all()
+    advance_payments = session.exec(
+        select(MonthlyAdvancePayment).where(
+            MonthlyAdvancePayment.household_id == current_member.household_id,
+            MonthlyAdvancePayment.month == active_month,
+        )
+    ).all()
 
     deleted_incomes = len(incomes)
     deleted_expenses = len(expenses)
+    deleted_advance_payments = len(advance_payments)
     for row in incomes:
         session.delete(row)
     for row in expenses:
+        session.delete(row)
+    for row in advance_payments:
         session.delete(row)
     session.commit()
 
@@ -1248,7 +1257,8 @@ def reset_active_period_basic(
         month=active_month,
         deleted_incomes=deleted_incomes,
         deleted_expenses=deleted_expenses,
-        message=f"Se reinició {active_month}: ingresos y gastos quedaron en cero.",
+        deleted_advance_payments=deleted_advance_payments,
+        message=f"Se reinició {active_month}: ingresos, gastos y pagos anticipados quedaron en cero.",
     )
 
 
