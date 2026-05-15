@@ -64,7 +64,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final nextMonth = _nextMonth(widget.currentMonth);
     final confirmed = await showDialog<bool>(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: true,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
           title: Text('Cerrar ${widget.currentMonth}'),
@@ -113,7 +113,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Future<void> _reopenMonth(String month) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: true,
       builder: (context) => AlertDialog(
         title: Text('Reabrir $month'),
         content: const Text('El cierre se elimina para permitir correcciones. Los gastos y deudas ya cargadas no se borran.'),

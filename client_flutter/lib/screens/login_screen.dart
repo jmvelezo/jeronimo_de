@@ -119,7 +119,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _showCreatedHouseholdDialog(SessionData session) async {
     await showDialog<void>(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: true,
       builder: (_) => AlertDialog(
         title: const Text('Hogar creado'),
         content: Column(

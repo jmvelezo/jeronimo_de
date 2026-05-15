@@ -1256,8 +1256,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      isDismissible: false,
-      enableDrag: false,
+      isDismissible: true,
+      enableDrag: true,
       backgroundColor: Colors.transparent,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => _SheetFrame(
@@ -1362,7 +1362,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<bool> _confirmCopyPreviousIncome(String previousMonth) async {
     final result = await showDialog<bool>(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: true,
       builder: (context) => AlertDialog(
         title: const Text('Copiar ingresos anteriores'),
         content: Text('Se copiarán los ingresos cargados en $previousMonth al período $month. Después podés editar cada monto antes o después de guardar.'),
@@ -1401,8 +1401,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       await showModalBottomSheet(
         context: context,
         isScrollControlled: true,
-        isDismissible: false,
-        enableDrag: false,
+        isDismissible: true,
+        enableDrag: true,
         backgroundColor: Colors.transparent,
         builder: (_) => StatefulBuilder(
           builder: (context, setModalState) => _SheetFrame(
@@ -1532,8 +1532,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      isDismissible: false,
-      enableDrag: false,
+      isDismissible: true,
+      enableDrag: true,
       backgroundColor: Colors.transparent,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) {
@@ -1666,8 +1666,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return await showModalBottomSheet<bool>(
         context: context,
         isScrollControlled: true,
-        isDismissible: false,
-        enableDrag: false,
+        isDismissible: true,
+        enableDrag: true,
         backgroundColor: Colors.transparent,
         builder: (_) => StatefulBuilder(
           builder: (context, setModalState) => _SheetFrame(
@@ -1837,7 +1837,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<bool> _confirmImportCardExpenses(int count, double total) async {
     final result = await showDialog<bool>(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: true,
       builder: (context) => AlertDialog(
         title: const Text('Importar gastos comunes'),
         content: Text('Se cargarán $count movimiento${count == 1 ? '' : 's'} como gastos comunes del período $month, por un total de ${money.format(total)}. Podés revisar o borrar estos gastos después desde “Ver gastos del mes”.'),
@@ -1902,8 +1902,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       await showModalBottomSheet(
         context: context,
         isScrollControlled: true,
-        isDismissible: false,
-        enableDrag: false,
+        isDismissible: true,
+        enableDrag: true,
         backgroundColor: Colors.transparent,
         builder: (_) => StatefulBuilder(
           builder: (context, setModalState) {
@@ -2068,8 +2068,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      isDismissible: false,
-      enableDrag: false,
+      isDismissible: true,
+      enableDrag: true,
       backgroundColor: Colors.transparent,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => _SheetFrame(
