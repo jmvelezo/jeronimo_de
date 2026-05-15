@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date as date_type, datetime
 from pydantic import BaseModel, Field
 from .models import CreditBalanceStatus, DebtSource, DebtStatus, MemberRole, PaymentStatus, TaskPriority, TaskRepeatRule, TaskStatus
 
@@ -95,7 +95,7 @@ class ExpenseCreate(BaseModel):
     amount: float = Field(gt=0)
     category: str = "General"
     description: str = ""
-    date: date
+    date: date_type
     is_shared: bool = True
 
 
@@ -105,13 +105,13 @@ class ExpenseRead(BaseModel):
     amount: float
     category: str
     description: str
-    date: date
+    date: date_type
     month: str
     is_shared: bool
 
 
 class CardImportPreviewItem(BaseModel):
-    date: date | None = None
+    date: date_type | None = None
     description: str = ""
     amount: float = Field(ge=0)
     currency: str = "ARS"
@@ -209,7 +209,7 @@ class DebtRead(BaseModel):
 
 class DebtPaymentCreate(BaseModel):
     amount: float = Field(gt=0)
-    date: date
+    date: date_type
     note: str = ""
 
 
@@ -226,7 +226,7 @@ class DebtPaymentRead(BaseModel):
     applied_amount: float = 0
     credit_amount: float = 0
     status: PaymentStatus = PaymentStatus.pending
-    date: date
+    date: date_type
     note: str
     rejected_reason: str = ""
     confirmed_by_member_id: int | None = None
@@ -255,7 +255,7 @@ class MonthlyAdvancePaymentCreate(BaseModel):
     month: str = Field(pattern=r"^\d{4}-\d{2}$")
     received_by_member_id: int
     amount: float = Field(gt=0)
-    date: date
+    date: date_type
     note: str = ""
 
 
@@ -268,7 +268,7 @@ class MonthlyAdvancePaymentRead(BaseModel):
     applied_amount: float = 0
     credit_amount: float = 0
     status: PaymentStatus = PaymentStatus.pending
-    date: date
+    date: date_type
     note: str = ""
     rejected_reason: str = ""
     confirmed_by_member_id: int | None = None
@@ -279,8 +279,8 @@ class HouseholdPeriodSettingsRead(BaseModel):
     period_mode: str = "calendar"
     start_day: int = 1
     active_month: str
-    period_start: date
-    period_end: date
+    period_start: date_type
+    period_end: date_type
     label: str
     active_month_override: str | None = None
     is_manual: bool = False
@@ -344,8 +344,8 @@ class HouseholdTaskCreate(BaseModel):
     title: str = Field(min_length=2, max_length=160)
     description: str = ""
     assigned_member_id: int | None = None
-    due_date: date | None = None
-    alert_date: date | None = None
+    due_date: date_type | None = None
+    alert_date: date_type | None = None
     priority: TaskPriority = TaskPriority.normal
     repeat_rule: TaskRepeatRule = TaskRepeatRule.none
     source_type: str = Field(default="manual", max_length=40)
@@ -359,8 +359,8 @@ class HouseholdTaskUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=2, max_length=160)
     description: str | None = None
     assigned_member_id: int | None = None
-    due_date: date | None = None
-    alert_date: date | None = None
+    due_date: date_type | None = None
+    alert_date: date_type | None = None
     priority: TaskPriority | None = None
     status: TaskStatus | None = None
     repeat_rule: TaskRepeatRule | None = None
@@ -377,8 +377,8 @@ class HouseholdTaskRead(BaseModel):
     title: str
     description: str
     assigned_member_id: int | None = None
-    due_date: date | None = None
-    alert_date: date | None = None
+    due_date: date_type | None = None
+    alert_date: date_type | None = None
     priority: TaskPriority
     status: TaskStatus
     repeat_rule: TaskRepeatRule
@@ -443,7 +443,7 @@ class AiWeeklySettingsRead(BaseModel):
     country_context: str = "Argentina"
     last_report_created_at: datetime | None = None
     last_report_title: str | None = None
-    next_analysis_at: date | None = None
+    next_analysis_at: date_type | None = None
     next_analysis_hint: str | None = None
 
 
@@ -470,7 +470,7 @@ class AiVisibleTip(BaseModel):
     body: str
     level: str = "info"
     kind: str = "general"
-    valid_until: date | None = None
+    valid_until: date_type | None = None
 
 
 class AiWeeklyReportRead(BaseModel):
