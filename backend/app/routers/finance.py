@@ -1,11 +1,32 @@
 import json
+import re
+from io import BytesIO
 from datetime import date as Date, datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlmodel import Session, select
 from ..database import get_session
-from ..models import CreditBalance, CreditBalanceStatus, Debt, DebtPayment, DebtSource, DebtStatus, Expense, HouseholdPeriodSettings, Member, MemberRole, MonthlyAdvancePayment, MonthlyClose, MonthlyIncome, MonthlyParticipation, PaymentStatus
+from ..models import (
+    CreditBalance,
+    CreditBalanceStatus,
+    Debt,
+    DebtPayment,
+    DebtSource,
+    DebtStatus,
+    Expense,
+    FixedExpenseTemplate,
+    HouseholdPeriodSettings,
+    Member,
+    MemberRole,
+    MonthlyAdvancePayment,
+    MonthlyClose,
+    MonthlyIncome,
+    MonthlyParticipation,
+    PaymentStatus,
+)
 from ..schemas import (
     AutomaticDebtCreate,
+    CardImportPreviewItem,
+    CardImportPreviewResponse,
     DebtCancel,
     DebtCreate,
     CreditBalanceApply,
@@ -16,6 +37,9 @@ from ..schemas import (
     DebtRead,
     ExpenseCreate,
     ExpenseRead,
+    FixedExpenseTemplateCreate,
+    FixedExpenseTemplateRead,
+    FixedExpenseTemplateUpdate,
     IncomeRead,
     IncomeUpsert,
     MemberParticipationRead,
@@ -35,14 +59,170 @@ from .auth import get_current_member
 router = APIRouter(prefix="/finance", tags=["finance"])
 
 
+_CARD_IMPORT_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _parse_card_amount(raw: str) -> float | None:
+    value = raw.strip()
+    if not value:
+        return None
+    value = value.replace('$', '').replace('ARS', '').replace(' ', '').replace(' ', '')
+    value = value.replace('+', '')
+    negative = value.startswith('-') or value.endswith('-') or value.startswith('(')
+    value = value.strip('-()')
+    if not value:
+        return None
+    if ',' in value:
+        value = value.replace('.', '').replace(',', '.')
+    else:
+        parts = value.split('.')
+        if len(parts) > 2:
+            value = ''.join(parts)
+    try:
+        amount = abs(float(value))
+    except ValueError:
+        return None
+    if amount <= 0:
+        return None
+    return amount if not negative else amount
+
+
+def _parse_card_date(raw: str, fallback_month: str | None = None) -> Date | None:
+    parts = re.split(r'[/-]', raw.strip())
+    if len(parts) < 2:
+        return None
+    try:
+        day = int(parts[0])
+        month = int(parts[1])
+        if len(parts) >= 3:
+            year = int(parts[2])
+            if year < 100:
+                year += 2000
+        elif fallback_month:
+            year = int(fallback_month.split('-')[0])
+        else:
+            year = datetime.now(timezone.utc).year
+        return Date(year, month, day)
+    except Exception:
+        return None
+
+
+def _guess_card_category(description: str) -> str:
+    text = description.lower()
+    rules = [
+        ('Supermercado', ['super', 'mercado', 'carrefour', 'coto', 'dia ', 'jumbo', 'vea']),
+        ('Comida', ['restaurant', 'resto', 'bar ', 'cafe', 'delivery', 'pedidosya', 'rappi', 'mostaza', 'mcdonald']),
+        ('Transporte', ['sube', 'uber', 'cabify', 'taxi', 'ypf', 'shell', 'axion', 'combustible']),
+        ('Servicios', ['luz', 'gas', 'aysa', 'edenor', 'edesur', 'telecom', 'movistar', 'claro', 'personal', 'internet']),
+        ('Salud', ['farmacia', 'doctor', 'medic', 'clinica', 'hospital']),
+        ('Hogar', ['ferreteria', 'easy', 'sodimac', 'pintureria', 'bazar']),
+    ]
+    for category, keywords in rules:
+        if any(keyword in text for keyword in keywords):
+            return category
+    return 'General'
+
+
+def _extract_pdf_text(file_bytes: bytes) -> tuple[str, list[str]]:
+    warnings: list[str] = []
+    try:
+        from pypdf import PdfReader
+    except Exception as exc:  # pragma: no cover - depende del entorno
+        raise HTTPException(status_code=500, detail='El servidor no tiene disponible el lector de PDF.') from exc
+    try:
+        reader = PdfReader(BytesIO(file_bytes))
+        texts: list[str] = []
+        for page in reader.pages[:12]:
+            texts.append(page.extract_text() or '')
+        text = '\n'.join(texts).strip()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail='No se pudo leer el PDF. Probá con un resumen digital, no escaneado.') from exc
+    if not text:
+        warnings.append('No se detectó texto en el PDF. Si es un escaneo o imagen, esta etapa no usa OCR.')
+    return text, warnings
+
+
+def _detect_card_movements(text: str, fallback_month: str | None = None) -> tuple[list[CardImportPreviewItem], list[str]]:
+    warnings: list[str] = []
+    items: list[CardImportPreviewItem] = []
+    date_re = re.compile(r'\b(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b')
+    amount_re = re.compile(r'(?<!\d)(?:\$\s*)?-?\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|-?\d+(?:,\d{2})(?!\d)')
+    ignored = ('total', 'saldo', 'pago', 'vencimiento', 'cierre', 'limite', 'límite', 'resumen', 'cuota del resumen')
+    seen: set[tuple[str, str, int]] = set()
+
+    for raw_line in text.splitlines():
+        line = re.sub(r'\s+', ' ', raw_line).strip()
+        if len(line) < 8:
+            continue
+        lower = line.lower()
+        if any(word in lower for word in ignored) and not re.search(r'compra|consumo|establecimiento', lower):
+            continue
+        date_match = date_re.search(line)
+        if not date_match:
+            continue
+        amount_matches = list(amount_re.finditer(line))
+        if not amount_matches:
+            continue
+        # Usar el último importe de la línea, que suele ser el monto final de la operación.
+        amount_match = amount_matches[-1]
+        amount = _parse_card_amount(amount_match.group(0))
+        if amount is None:
+            continue
+        parsed_date = _parse_card_date(date_match.group(1), fallback_month)
+        description = (line[:date_match.start()] + ' ' + line[date_match.end():amount_match.start()]).strip(' -·|')
+        if not description:
+            description = line[date_match.end():amount_match.start()].strip(' -·|') or 'Movimiento detectado'
+        # Limpiar números sueltos típicos de comprobantes/cuotas.
+        description = re.sub(r'\b\d{3,}\b', '', description).strip(' -·|') or 'Movimiento detectado'
+        key = (parsed_date.isoformat() if parsed_date else '', description.lower(), int(round(amount * 100)))
+        if key in seen:
+            continue
+        seen.add(key)
+        confidence = 0.72 if parsed_date else 0.55
+        if '$' in amount_match.group(0) or 'ars' in lower:
+            confidence += 0.08
+        items.append(
+            CardImportPreviewItem(
+                date=parsed_date,
+                description=description[:160],
+                amount=round_money(amount),
+                currency='ARS',
+                category=_guess_card_category(description),
+                confidence=min(confidence, 0.92),
+                raw_text=line[:260],
+            )
+        )
+        if len(items) >= 120:
+            warnings.append('Se muestran los primeros 120 movimientos detectados para mantener la vista previa liviana.')
+            break
+
+    if not items and text.strip():
+        warnings.append('No se detectaron movimientos con el formato esperado. El resumen puede tener columnas no compatibles todavía.')
+    return items, warnings
+
+
 def _month_add(year: int, month: int, delta: int) -> tuple[int, int]:
     idx = year * 12 + (month - 1) + delta
     return idx // 12, idx % 12 + 1
 
 
+def _month_str_add(month: str, delta: int) -> str:
+    year, mon = [int(x) for x in month.split("-")]
+    y, m = _month_add(year, mon, delta)
+    return f"{y:04d}-{m:02d}"
+
+
 def _period_end(start: Date) -> Date:
     y, m = _month_add(start.year, start.month, 1)
     return Date(y, m, start.day) - timedelta(days=1)
+
+
+def _active_period(settings: HouseholdPeriodSettings, today: Date | None = None) -> tuple[str, Date, Date, bool]:
+    if settings.active_month_override:
+        start, end = period_bounds_from_month(settings.active_month_override, settings)
+        return settings.active_month_override, start, end, True
+    active_month, start, end = period_for_date(today or datetime.now(timezone.utc).date(), settings)
+    return active_month, start, end, False
 
 
 def get_period_settings(session: Session, household_id: int) -> HouseholdPeriodSettings:
@@ -95,6 +275,61 @@ def ensure_operator(current_member: Member) -> None:
 
 def month_from_date(value) -> str:
     return f"{value.year:04d}-{value.month:02d}"
+
+
+
+def _fixed_template_read(template: FixedExpenseTemplate) -> FixedExpenseTemplateRead:
+    return FixedExpenseTemplateRead(**template.model_dump())
+
+
+def _generated_fixed_expense_description(template: FixedExpenseTemplate) -> str:
+    notes = (template.notes or '').strip()
+    return f"Gasto fijo: {template.name.strip()}" + (f" · {notes}" if notes else "")
+
+
+def _existing_generated_fixed_expense(session: Session, household_id: int, month: str, template: FixedExpenseTemplate) -> Expense | None:
+    description = _generated_fixed_expense_description(template)
+    return session.exec(
+        select(Expense).where(
+            Expense.household_id == household_id,
+            Expense.month == month,
+            Expense.category == (template.category.strip() or "General"),
+            Expense.amount == template.amount,
+            Expense.description == description,
+        )
+    ).first()
+
+
+def _create_expense_from_fixed_template(
+    session: Session,
+    household_id: int,
+    template: FixedExpenseTemplate,
+    month: str,
+    current_member: Member,
+) -> Expense:
+    if template.household_id != household_id:
+        raise HTTPException(status_code=404, detail="Gasto fijo no encontrado")
+    ensure_month_open(session, household_id, month)
+    paid_by_member_id = template.default_paid_by_member_id or current_member.id
+    ensure_member_in_household(session, household_id, paid_by_member_id)
+    if _existing_generated_fixed_expense(session, household_id, month, template):
+        raise HTTPException(status_code=409, detail="Este gasto fijo ya fue generado para este período.")
+    settings = get_period_settings(session, household_id)
+    period_start, _ = period_bounds_from_month(month, settings)
+    expense = Expense(
+        household_id=household_id,
+        paid_by_member_id=paid_by_member_id,
+        date=period_start,
+        month=month,
+        category=template.category.strip() or "General",
+        amount=template.amount,
+        description=_generated_fixed_expense_description(template),
+        is_shared=True,
+    )
+    session.add(expense)
+    session.commit()
+    session.refresh(expense)
+    return expense
 
 
 def ensure_member_in_household(session: Session, household_id: int, member_id: int) -> Member:
@@ -393,6 +628,137 @@ def list_income(month: str, current_member: Member = Depends(get_current_member)
     return [IncomeRead(id=row.id or 0, member_id=row.member_id, month=row.month, amount=row.amount, note=row.note) for row in rows]
 
 
+@router.get("/fixed-expenses", response_model=list[FixedExpenseTemplateRead])
+def list_fixed_expenses(
+    active_only: bool = True,
+    current_member: Member = Depends(get_current_member),
+    session: Session = Depends(get_session),
+):
+    query = select(FixedExpenseTemplate).where(FixedExpenseTemplate.household_id == current_member.household_id)
+    if active_only:
+        query = query.where(FixedExpenseTemplate.active == True)  # noqa: E712
+    rows = session.exec(query.order_by(FixedExpenseTemplate.active.desc(), FixedExpenseTemplate.name.asc())).all()
+    return [_fixed_template_read(row) for row in rows]
+
+
+@router.post("/fixed-expenses", response_model=FixedExpenseTemplateRead)
+def create_fixed_expense(
+    payload: FixedExpenseTemplateCreate,
+    current_member: Member = Depends(get_current_member),
+    session: Session = Depends(get_session),
+):
+    paid_by = payload.default_paid_by_member_id
+    if paid_by is not None:
+        ensure_member_in_household(session, current_member.household_id, paid_by)
+    template = FixedExpenseTemplate(
+        household_id=current_member.household_id,
+        name=payload.name.strip(),
+        amount=payload.amount,
+        category=payload.category.strip() or "General",
+        default_paid_by_member_id=paid_by,
+        frequency=payload.frequency.strip() or "monthly",
+        active=payload.active,
+        notes=(payload.notes or '').strip(),
+    )
+    session.add(template)
+    session.commit()
+    session.refresh(template)
+    return _fixed_template_read(template)
+
+
+@router.patch("/fixed-expenses/{template_id}", response_model=FixedExpenseTemplateRead)
+def update_fixed_expense(
+    template_id: int,
+    payload: FixedExpenseTemplateUpdate,
+    current_member: Member = Depends(get_current_member),
+    session: Session = Depends(get_session),
+):
+    template = session.get(FixedExpenseTemplate, template_id)
+    if not template or template.household_id != current_member.household_id:
+        raise HTTPException(status_code=404, detail="Gasto fijo no encontrado")
+    if payload.default_paid_by_member_id is not None:
+        ensure_member_in_household(session, current_member.household_id, payload.default_paid_by_member_id)
+    if payload.name is not None:
+        template.name = payload.name.strip()
+    if payload.amount is not None:
+        template.amount = payload.amount
+    if payload.category is not None:
+        template.category = payload.category.strip() or "General"
+    if 'default_paid_by_member_id' in payload.model_fields_set:
+        template.default_paid_by_member_id = payload.default_paid_by_member_id
+    if payload.frequency is not None:
+        template.frequency = payload.frequency.strip() or "monthly"
+    if payload.active is not None:
+        template.active = payload.active
+    if payload.notes is not None:
+        template.notes = payload.notes.strip()
+    template.updated_at = datetime.now(timezone.utc)
+    session.add(template)
+    session.commit()
+    session.refresh(template)
+    return _fixed_template_read(template)
+
+
+@router.post("/fixed-expenses/{template_id}/generate", response_model=ExpenseRead)
+def generate_fixed_expense(
+    template_id: int,
+    month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    current_member: Member = Depends(get_current_member),
+    session: Session = Depends(get_session),
+):
+    template = session.get(FixedExpenseTemplate, template_id)
+    if not template or template.household_id != current_member.household_id:
+        raise HTTPException(status_code=404, detail="Gasto fijo no encontrado")
+    if not template.active:
+        raise HTTPException(status_code=409, detail="Este gasto fijo está inactivo.")
+    expense = _create_expense_from_fixed_template(session, current_member.household_id, template, month, current_member)
+    return ExpenseRead(**expense.model_dump())
+
+
+@router.post("/fixed-expenses/generate-for-month", response_model=list[ExpenseRead])
+def generate_fixed_expenses_for_month(
+    month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    current_member: Member = Depends(get_current_member),
+    session: Session = Depends(get_session),
+):
+    templates = session.exec(
+        select(FixedExpenseTemplate).where(
+            FixedExpenseTemplate.household_id == current_member.household_id,
+            FixedExpenseTemplate.active == True,  # noqa: E712
+        )
+    ).all()
+    generated: list[Expense] = []
+    for template in templates:
+        if _existing_generated_fixed_expense(session, current_member.household_id, month, template):
+            continue
+        generated.append(_create_expense_from_fixed_template(session, current_member.household_id, template, month, current_member))
+    return [ExpenseRead(**expense.model_dump()) for expense in generated]
+
+
+
+
+@router.post("/card-imports/preview", response_model=CardImportPreviewResponse)
+async def preview_card_import(
+    file: UploadFile = File(...),
+    month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
+    current_member: Member = Depends(get_current_member),
+):
+    filename = (file.filename or '').lower()
+    if not filename.endswith('.pdf'):
+        raise HTTPException(status_code=400, detail='Subí un archivo PDF de resumen de tarjeta.')
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail='El PDF está vacío.')
+    if len(file_bytes) > _CARD_IMPORT_MAX_BYTES:
+        raise HTTPException(status_code=413, detail='El PDF supera el tamaño máximo permitido para esta vista previa.')
+    text, warnings = _extract_pdf_text(file_bytes)
+    items, detection_warnings = _detect_card_movements(text, month)
+    warnings.extend(detection_warnings)
+    if items:
+        warnings.append('Vista previa solamente: ningún movimiento fue cargado como gasto común.')
+    return CardImportPreviewResponse(items=items, warnings=warnings)
+
+
 @router.post("/expenses", response_model=ExpenseRead)
 def create_expense(
     payload: ExpenseCreate,
@@ -400,7 +766,10 @@ def create_expense(
     session: Session = Depends(get_session),
 ):
     settings = get_period_settings(session, current_member.household_id)
-    expense_month, _, _ = period_for_date(payload.date, settings)
+    if settings.active_month_override:
+        expense_month = settings.active_month_override
+    else:
+        expense_month, _, _ = period_for_date(payload.date, settings)
     ensure_month_open(session, current_member.household_id, expense_month)
     ensure_member_in_household(session, current_member.household_id, payload.paid_by_member_id)
     expense = Expense(
@@ -788,15 +1157,18 @@ def advance_payment_to_read(payment: MonthlyAdvancePayment) -> MonthlyAdvancePay
 
 def period_settings_to_read(session: Session, household_id: int) -> HouseholdPeriodSettingsRead:
     settings = get_period_settings(session, household_id)
-    active_month, start, end = period_for_date(datetime.now(timezone.utc).date(), settings)
+    active_month, start, end, is_manual = _active_period(settings)
     mode_label = "mes calendario" if settings.period_mode != "custom" else f"corte día {settings.start_day}"
+    manual_label = " · período operativo manual" if is_manual else ""
     return HouseholdPeriodSettingsRead(
         period_mode=settings.period_mode,
         start_day=settings.start_day,
         active_month=active_month,
         period_start=start,
         period_end=end,
-        label=f"{active_month} · {mode_label} · {start.isoformat()} al {end.isoformat()}",
+        label=f"{active_month} · {mode_label}{manual_label} · {start.isoformat()} al {end.isoformat()}",
+        active_month_override=settings.active_month_override,
+        is_manual=is_manual,
     )
 
 
@@ -967,6 +1339,14 @@ def close_month(
         closed_by_member_id=current_member.id or 0,
     )
     session.add(close)
+
+    if payload.advance_to_next:
+        settings = get_period_settings(session, current_member.household_id)
+        settings.active_month_override = _month_str_add(payload.month, 1)
+        settings.updated_by_member_id = current_member.id
+        settings.updated_at = datetime.now(timezone.utc)
+        session.add(settings)
+
     session.commit()
     session.refresh(close)
     return monthly_close_to_read(close)

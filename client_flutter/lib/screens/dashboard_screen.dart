@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 import '../models/app_models.dart';
 import '../services/api_service.dart';
@@ -38,6 +39,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   HouseholdPeriodSettingsItem? periodSettings;
   List<MonthlyAdvancePaymentItem> advancePayments = [];
   List<CreditBalanceItem> creditBalances = [];
+  List<FixedExpenseTemplateItem> fixedExpenseTemplates = [];
   AiWeeklyReportResult? weeklyAi;
   bool weeklyAiLoading = false;
   String? weeklyAiMessage;
@@ -83,6 +85,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       } catch (_) {
         loadedCreditBalances = [];
       }
+      List<FixedExpenseTemplateItem> loadedFixedExpenseTemplates = [];
+      try {
+        loadedFixedExpenseTemplates = await widget.api.getFixedExpenses(activeOnly: true);
+      } catch (_) {
+        loadedFixedExpenseTemplates = [];
+      }
       HouseholdTaskSummary? loadedTaskSummary;
       try {
         loadedTaskSummary = await widget.api.getTaskSummary();
@@ -119,6 +127,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         periodSettings = loadedPeriod;
         advancePayments = loadedAdvancePayments;
         creditBalances = loadedCreditBalances;
+        fixedExpenseTemplates = loadedFixedExpenseTemplates;
         lastSuccessfulSync = last;
         offlineMode = false;
         syncMessage = "Sincronizado con el hogar compartido.";
@@ -134,6 +143,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           taskSummary = cached.taskSummary;
           advancePayments = [];
           creditBalances = [];
+          fixedExpenseTemplates = [];
           lastSuccessfulSync = cached.savedAt;
           offlineMode = true;
           syncMessage = "Sin conexión. Mostrando la última información sincronizada.";
@@ -1015,6 +1025,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 10),
           SoftActionTile(
+            onTap: members.isEmpty ? null : _showFixedExpensesSheet,
+            icon: Icons.event_repeat_outlined,
+            assetIconPath: kBrandAhorro,
+            title: 'Gastos fijos',
+            subtitle: fixedExpenseTemplates.isEmpty
+                ? 'Creá plantillas y generá gastos del mes cuando quieras.'
+                : '${fixedExpenseTemplates.length} plantilla${fixedExpenseTemplates.length == 1 ? '' : 's'} activa${fixedExpenseTemplates.length == 1 ? '' : 's'} para sugerir.',
+            color: kSuccess,
+          ),
+
+          const SizedBox(height: 10),
+          SoftActionTile(
+            onTap: members.isEmpty ? null : _showCardImportPreviewSheet,
+            icon: Icons.picture_as_pdf_outlined,
+            assetIconPath: kBrandGastos,
+            title: 'Importar resumen de tarjeta',
+            subtitle: 'Subí un PDF y revisá movimientos detectados sin cargarlos todavía.',
+            color: kPrimaryDark,
+          ),
+          const SizedBox(height: 10),
+          SoftActionTile(
             onTap: members.isEmpty
                 ? null
                 : () => _openInternal(ExpensesScreen(api: widget.api, members: members, month: month, onChanged: _refresh)),
@@ -1225,6 +1256,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       backgroundColor: Colors.transparent,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => _SheetFrame(
@@ -1300,45 +1333,731 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  String _previousMonth(String value) {
+    final parts = value.split('-');
+    if (parts.length != 2) return value;
+    var year = int.tryParse(parts[0]) ?? DateTime.now().year;
+    var monthNumber = int.tryParse(parts[1]) ?? DateTime.now().month;
+    monthNumber -= 1;
+    if (monthNumber <= 0) {
+      monthNumber = 12;
+      year -= 1;
+    }
+    return '${year.toString().padLeft(4, '0')}-${monthNumber.toString().padLeft(2, '0')}';
+  }
+
+  double _parseMoneyInput(String raw) {
+    final normalized = raw.trim().replaceAll('.', '').replaceAll(',', '.');
+    if (normalized.isEmpty) return 0;
+    final parsed = double.tryParse(normalized);
+    if (parsed == null || parsed < 0) throw const FormatException('Monto inválido');
+    return parsed;
+  }
+
+  String _formatIncomeInput(double amount) {
+    if (amount <= 0) return '';
+    return amount.toStringAsFixed(0);
+  }
+
+  Future<bool> _confirmCopyPreviousIncome(String previousMonth) async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Copiar ingresos anteriores'),
+        content: Text('Se copiarán los ingresos cargados en $previousMonth al período $month. Después podés editar cada monto antes o después de guardar.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Copiar')),
+        ],
+      ),
+    );
+    return result == true;
+  }
+
   Future<void> _showIncomeSheet() async {
     final incomeMembers = _participatingMembers;
     final controllers = {for (final m in incomeMembers) m.id: TextEditingController()};
+    final previousMonth = _previousMonth(month);
+    var loadedCurrentIncome = <IncomeItem>[];
+    var loadingCopy = false;
+    var sheetMessage = '';
+
+    try {
+      loadedCurrentIncome = await widget.api.getIncome(month);
+      final byMember = {for (final income in loadedCurrentIncome) income.memberId: income};
+      for (final member in incomeMembers) {
+        final existing = byMember[member.id];
+        if (existing != null) controllers[member.id]?.text = _formatIncomeInput(existing.amount);
+      }
+    } catch (_) {
+      loadedCurrentIncome = [];
+      sheetMessage = 'No se pudieron leer ingresos previos. Podés cargarlos igual.';
+    }
+
+    final hasCurrentIncome = loadedCurrentIncome.any((item) => incomeMembers.any((member) => member.id == item.memberId) && item.amount > 0);
+
+    try {
+      await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        isDismissible: false,
+        enableDrag: false,
+        backgroundColor: Colors.transparent,
+        builder: (_) => StatefulBuilder(
+          builder: (context, setModalState) => _SheetFrame(
+            title: 'Ingresos de $month',
+            subtitle: hasCurrentIncome ? 'Revisá o ajustá lo que cobró cada integrante este período.' : 'Todavía no cargaste ingresos para este período.',
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: kLavender,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: kPrimary.withOpacity(0.12)),
+                  ),
+                  child: Text(
+                    'Los ingresos son mensuales y solo afectan el reparto proporcional de $month. No se copian automáticamente al abrir un período nuevo.',
+                    style: const TextStyle(color: Colors.black54, fontWeight: FontWeight.w600, height: 1.25),
+                  ),
+                ),
+                if (sheetMessage.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text(sheetMessage, style: const TextStyle(color: kWarning, fontWeight: FontWeight.w700)),
+                ],
+                const SizedBox(height: 14),
+                for (final member in incomeMembers) ...[
+                  TextField(
+                    controller: controllers[member.id],
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9\.,]'))],
+                    decoration: InputDecoration(
+                      labelText: 'Ingreso de ${member.name}',
+                      helperText: 'ARS · dejá vacío o 0 si no tuvo ingresos este mes',
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
+                BigActionButton(
+                  outlined: true,
+                  onPressed: loadingCopy
+                      ? null
+                      : () async {
+                          final confirm = await _confirmCopyPreviousIncome(previousMonth);
+                          if (!confirm) return;
+                          setModalState(() {
+                            loadingCopy = true;
+                            sheetMessage = '';
+                          });
+                          try {
+                            final previous = await widget.api.getIncome(previousMonth);
+                            final previousByMember = {for (final income in previous) income.memberId: income};
+                            var copied = 0;
+                            for (final member in incomeMembers) {
+                              final previousIncome = previousByMember[member.id];
+                              if (previousIncome != null && previousIncome.amount > 0) {
+                                controllers[member.id]?.text = _formatIncomeInput(previousIncome.amount);
+                                await widget.api.saveIncome(memberId: member.id, month: month, amount: previousIncome.amount);
+                                copied += 1;
+                              }
+                            }
+                            if (copied == 0) {
+                              setModalState(() => sheetMessage = 'No había ingresos cargados en $previousMonth para copiar.');
+                            } else {
+                              setModalState(() => sheetMessage = 'Ingresos copiados desde $previousMonth. Podés ajustarlos y guardar de nuevo.');
+                              await _refresh();
+                            }
+                          } catch (e) {
+                            setModalState(() => sheetMessage = friendlyMessage(e));
+                          } finally {
+                            setModalState(() => loadingCopy = false);
+                          }
+                        },
+                  icon: Icons.copy_all_outlined,
+                  title: loadingCopy ? 'Copiando ingresos...' : 'Copiar ingresos del mes anterior',
+                  subtitle: 'Trae los montos de $previousMonth y los deja editables.',
+                ),
+                const SizedBox(height: 10),
+                BigActionButton(
+                  onPressed: () async {
+                    try {
+                      for (final member in incomeMembers) {
+                        final amount = _parseMoneyInput(controllers[member.id]?.text ?? '');
+                        await widget.api.saveIncome(memberId: member.id, month: month, amount: amount);
+                      }
+                      if (mounted) Navigator.pop(context);
+                      await _refresh();
+                    } on FormatException {
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Revisá los montos: usá solo números, punto o coma.')));
+                    } catch (e) {
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+                    }
+                  },
+                  icon: Icons.save_outlined,
+                  title: 'Guardar ingresos de $month',
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    } finally {
+      for (final controller in controllers.values) {
+        controller.dispose();
+      }
+    }
+  }
+
+
+  Future<List<FixedExpenseTemplateItem>> _loadFixedExpenseTemplates({bool activeOnly = false}) async {
+    try {
+      return await widget.api.getFixedExpenses(activeOnly: activeOnly);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+      return fixedExpenseTemplates;
+    }
+  }
+
+  Future<void> _showFixedExpensesSheet() async {
+    var templates = await _loadFixedExpenseTemplates(activeOnly: false);
+    var busy = false;
+    var message = templates.isEmpty
+        ? 'Todavía no hay plantillas. Creá una para sugerir gastos cada mes.'
+        : 'Generá solo los gastos que correspondan a $month. No se cargan automáticamente.';
+
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       backgroundColor: Colors.transparent,
-      builder: (_) => _SheetFrame(
-        title: 'Ingresos del mes',
-        subtitle: 'Cargá lo que cobró cada integrante para calcular el reparto.',
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final member in incomeMembers) ...[
-              TextField(
-                controller: controllers[member.id],
-                keyboardType: TextInputType.number,
-                decoration: InputDecoration(labelText: 'Ingreso de ${member.name}'),
-              ),
-              const SizedBox(height: 10),
-            ],
-            BigActionButton(
-              onPressed: () async {
-                for (final member in incomeMembers) {
-                  final raw = controllers[member.id]!.text.trim().replaceAll('.', '').replaceAll(',', '.');
-                  if (raw.isNotEmpty) {
-                    await widget.api.saveIncome(memberId: member.id, month: month, amount: double.parse(raw));
-                  }
-                }
-                if (mounted) Navigator.pop(context);
-                await _refresh();
-              },
-              icon: Icons.save_outlined,
-              title: 'Guardar ingresos',
+      builder: (_) => StatefulBuilder(
+        builder: (context, setModalState) {
+          Future<void> reload() async {
+            final fresh = await _loadFixedExpenseTemplates(activeOnly: false);
+            setModalState(() => templates = fresh);
+          }
+
+          Future<void> generateOne(FixedExpenseTemplateItem template) async {
+            setModalState(() {
+              busy = true;
+              message = '';
+            });
+            try {
+              await widget.api.generateFixedExpense(templateId: template.id, month: month);
+              await reload();
+              await _refresh();
+              setModalState(() => message = 'Gasto fijo generado para $month.');
+            } catch (e) {
+              setModalState(() => message = friendlyMessage(e));
+            } finally {
+              setModalState(() => busy = false);
+            }
+          }
+
+          Future<void> generateAll() async {
+            setModalState(() {
+              busy = true;
+              message = '';
+            });
+            try {
+              final generated = await widget.api.generateFixedExpensesForMonth(month);
+              await reload();
+              await _refresh();
+              setModalState(() {
+                message = generated.isEmpty
+                    ? 'No se generaron gastos nuevos: las plantillas activas ya estaban cargadas o no hay plantillas activas.'
+                    : 'Se generaron ${generated.length} gasto${generated.length == 1 ? '' : 's'} fijo${generated.length == 1 ? '' : 's'} para $month.';
+              });
+            } catch (e) {
+              setModalState(() => message = friendlyMessage(e));
+            } finally {
+              setModalState(() => busy = false);
+            }
+          }
+
+          return _SheetFrame(
+            title: 'Gastos fijos',
+            subtitle: 'Plantillas mensuales. Se generan manualmente para no contaminar el período.',
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                AppCard(
+                  padding: const EdgeInsets.all(12),
+                  color: kLavender,
+                  border: Border.all(color: kPrimary.withOpacity(0.12)),
+                  child: Text(
+                    message,
+                    style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, height: 1.25),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (templates.isEmpty)
+                  const Text('No hay gastos fijos configurados.', style: TextStyle(color: kMuted, fontWeight: FontWeight.w700))
+                else
+                  for (final template in templates) ...[
+                    _FixedExpenseTemplateCard(
+                      template: template,
+                      memberName: template.defaultPaidByMemberId == null ? 'Sin pagador fijo' : 'Paga ${_memberName(template.defaultPaidByMemberId!)}',
+                      money: money,
+                      busy: busy,
+                      onGenerate: template.active ? () => generateOne(template) : null,
+                      onEdit: () async {
+                        final changed = await _showFixedExpenseFormSheet(template: template);
+                        if (changed == true) await reload();
+                      },
+                      onToggleActive: (value) async {
+                        setModalState(() => busy = true);
+                        try {
+                          await widget.api.updateFixedExpense(templateId: template.id, active: value);
+                          await reload();
+                          await _refresh();
+                        } catch (e) {
+                          setModalState(() => message = friendlyMessage(e));
+                        } finally {
+                          setModalState(() => busy = false);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+                const SizedBox(height: 12),
+                BigActionButton(
+                  outlined: true,
+                  onPressed: busy
+                      ? null
+                      : () async {
+                          final changed = await _showFixedExpenseFormSheet();
+                          if (changed == true) await reload();
+                        },
+                  icon: Icons.add_circle_outline,
+                  title: 'Nueva plantilla fija',
+                  subtitle: 'Alquiler, servicios, expensas u otros gastos repetidos.',
+                ),
+                const SizedBox(height: 10),
+                BigActionButton(
+                  onPressed: busy || templates.where((item) => item.active).isEmpty ? null : generateAll,
+                  icon: Icons.playlist_add_check_circle_outlined,
+                  title: busy ? 'Procesando...' : 'Generar gastos activos de $month',
+                  subtitle: 'Solo crea los que todavía no fueron generados para este período.',
+                ),
+              ],
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
+  }
+
+  Future<bool?> _showFixedExpenseFormSheet({FixedExpenseTemplateItem? template}) async {
+    final nameController = TextEditingController(text: template?.name ?? '');
+    final amountController = TextEditingController(text: template == null ? '' : template.amount.toStringAsFixed(0));
+    final categoryController = TextEditingController(text: template?.category ?? 'General');
+    final notesController = TextEditingController(text: template?.notes ?? '');
+    int? selectedMemberId = template?.defaultPaidByMemberId;
+    var active = template?.active ?? true;
+
+    try {
+      return await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        isDismissible: false,
+        enableDrag: false,
+        backgroundColor: Colors.transparent,
+        builder: (_) => StatefulBuilder(
+          builder: (context, setModalState) => _SheetFrame(
+            title: template == null ? 'Nueva plantilla fija' : 'Editar gasto fijo',
+            subtitle: 'No genera gastos automáticamente. Solo deja preparada la sugerencia mensual.',
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Nombre del gasto fijo')),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: amountController,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9\.,]'))],
+                  decoration: const InputDecoration(labelText: 'Monto estimado'),
+                ),
+                const SizedBox(height: 10),
+                TextField(controller: categoryController, decoration: const InputDecoration(labelText: 'Categoría')),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<int?>(
+                  value: selectedMemberId,
+                  items: [
+                    const DropdownMenuItem<int?>(value: null, child: Text('Sin pagador fijo')),
+                    ...members.map((member) => DropdownMenuItem<int?>(value: member.id, child: Text(member.name))),
+                  ],
+                  onChanged: (value) => setModalState(() => selectedMemberId = value),
+                  decoration: const InputDecoration(labelText: 'Pagador sugerido'),
+                ),
+                const SizedBox(height: 10),
+                TextField(controller: notesController, decoration: const InputDecoration(labelText: 'Nota opcional')),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: active,
+                  onChanged: (value) => setModalState(() => active = value),
+                  title: const Text('Plantilla activa', style: TextStyle(fontWeight: FontWeight.w800)),
+                  subtitle: const Text('Solo las activas se sugieren para generar el mes.'),
+                ),
+                const SizedBox(height: 14),
+                BigActionButton(
+                  icon: Icons.save_outlined,
+                  title: template == null ? 'Guardar plantilla' : 'Guardar cambios',
+                  onPressed: () async {
+                    try {
+                      final amount = _parseMoneyInput(amountController.text);
+                      if (nameController.text.trim().length < 2) throw const FormatException('Nombre inválido');
+                      if (template == null) {
+                        await widget.api.createFixedExpense(
+                          name: nameController.text.trim(),
+                          amount: amount,
+                          category: categoryController.text.trim(),
+                          defaultPaidByMemberId: selectedMemberId,
+                          notes: notesController.text.trim(),
+                          active: active,
+                        );
+                      } else {
+                        await widget.api.updateFixedExpense(
+                          templateId: template.id,
+                          name: nameController.text.trim(),
+                          amount: amount,
+                          category: categoryController.text.trim(),
+                          defaultPaidByMemberId: selectedMemberId,
+                          clearDefaultPaidByMember: selectedMemberId == null,
+                          notes: notesController.text.trim(),
+                          active: active,
+                        );
+                      }
+                      if (mounted) Navigator.pop(context, true);
+                      await _refresh();
+                    } on FormatException {
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Revisá nombre y monto.')));
+                    } catch (e) {
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    } finally {
+      nameController.dispose();
+      amountController.dispose();
+      categoryController.dispose();
+      notesController.dispose();
+    }
+  }
+
+
+  String _dateOnly(DateTime date) => '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+
+  String _dateInputForCardImport(CardImportPreviewItem item) {
+    final raw = (item.date ?? '').trim();
+    if (RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(raw)) return raw;
+    return '$month-01';
+  }
+
+  DateTime _parseCardImportDate(String raw) {
+    final value = raw.trim();
+    final iso = RegExp(r'^(\d{4})-(\d{1,2})-(\d{1,2})$').firstMatch(value);
+    if (iso != null) {
+      return DateTime(int.parse(iso.group(1)!), int.parse(iso.group(2)!), int.parse(iso.group(3)!));
+    }
+    final short = RegExp(r'^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$').firstMatch(value);
+    if (short != null) {
+      final day = int.parse(short.group(1)!);
+      final mon = int.parse(short.group(2)!);
+      var year = int.parse(month.split('-').first);
+      final yearRaw = short.group(3);
+      if (yearRaw != null && yearRaw.isNotEmpty) {
+        year = int.parse(yearRaw);
+        if (year < 100) year += 2000;
+      }
+      return DateTime(year, mon, day);
+    }
+    throw const FormatException('Fecha inválida');
+  }
+
+  String _normalizeImportText(String value) {
+    return value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+  }
+
+  int _importAmountCents(double amount) => (amount * 100).round();
+
+  bool _isExactImportDuplicate(_CardImportDraft draft, List<ExpenseItem> existingExpenses) {
+    final amount = _parseMoneyInput(draft.amountController.text);
+    final date = _parseCardImportDate(draft.dateController.text);
+    final normalizedDescription = _normalizeImportText(draft.descriptionController.text);
+    return existingExpenses.any((expense) {
+      return expense.paidByMemberId == draft.paidByMemberId &&
+          expense.date == _dateOnly(date) &&
+          _importAmountCents(expense.amount) == _importAmountCents(amount) &&
+          _normalizeImportText(expense.description) == normalizedDescription;
+    });
+  }
+
+  bool _isPossibleImportDuplicate(_CardImportDraft draft, List<ExpenseItem> existingExpenses) {
+    double amount;
+    DateTime date;
+    try {
+      amount = _parseMoneyInput(draft.amountController.text);
+      date = _parseCardImportDate(draft.dateController.text);
+    } catch (_) {
+      return false;
+    }
+    final normalizedDescription = _normalizeImportText(draft.descriptionController.text);
+    return existingExpenses.any((expense) {
+      final sameDate = expense.date == _dateOnly(date);
+      final sameAmount = _importAmountCents(expense.amount) == _importAmountCents(amount);
+      final otherDescription = _normalizeImportText(expense.description);
+      final similarDescription = normalizedDescription.isNotEmpty &&
+          otherDescription.isNotEmpty &&
+          (normalizedDescription.contains(otherDescription) || otherDescription.contains(normalizedDescription));
+      return (sameDate && sameAmount) || (sameAmount && similarDescription);
+    });
+  }
+
+  double _safeDraftAmount(_CardImportDraft draft) {
+    try {
+      return _parseMoneyInput(draft.amountController.text);
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  Future<bool> _confirmImportCardExpenses(int count, double total) async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Importar gastos comunes'),
+        content: Text('Se cargarán $count movimiento${count == 1 ? '' : 's'} como gastos comunes del período $month, por un total de ${money.format(total)}. Podés revisar o borrar estos gastos después desde “Ver gastos del mes”.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Importar')),
+        ],
+      ),
+    );
+    return result == true;
+  }
+
+  Future<void> _showCardImportPreviewSheet() async {
+    if (members.isEmpty) return;
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf'],
+      withData: true,
+    );
+    if (picked == null || picked.files.isEmpty) return;
+    final file = picked.files.single;
+    final bytes = file.bytes;
+    if (bytes == null || bytes.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo leer el archivo seleccionado.')));
+      }
+      return;
+    }
+
+    CardImportPreviewResult preview;
+    try {
+      preview = await widget.api.previewCardImportPdf(bytes: bytes, filename: file.name, month: month);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+      return;
+    }
+
+    List<ExpenseItem> existingExpenses = [];
+    try {
+      existingExpenses = await widget.api.getExpenses(month);
+    } catch (_) {
+      existingExpenses = [];
+    }
+
+    final defaultPaidBy = members.any((member) => member.id == widget.session.member.id) ? widget.session.member.id : members.first.id;
+    final drafts = preview.items.map((item) {
+      final draft = _CardImportDraft.fromPreview(
+        item: item,
+        defaultPaidByMemberId: defaultPaidBy,
+        dateText: _dateInputForCardImport(item),
+      );
+      draft.possibleDuplicate = _isPossibleImportDuplicate(draft, existingExpenses);
+      return draft;
+    }).toList();
+
+    var busy = false;
+    var sheetMessage = preview.items.isEmpty
+        ? 'No se detectaron movimientos importables. Podés probar con otro resumen digital.'
+        : 'Vista previa: desmarcá consumos personales, corregí los datos y confirmá solo lo que corresponde a la casa.';
+
+    try {
+      await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        isDismissible: false,
+        enableDrag: false,
+        backgroundColor: Colors.transparent,
+        builder: (_) => StatefulBuilder(
+          builder: (context, setModalState) {
+            final selectedDrafts = drafts.where((draft) => draft.selected).toList();
+            final selectedTotal = selectedDrafts.fold<double>(0, (sum, draft) => sum + _safeDraftAmount(draft));
+
+            Future<void> importSelected() async {
+              var closedAfterImport = false;
+              final selected = drafts.where((draft) => draft.selected).toList();
+              if (selected.isEmpty) {
+                setModalState(() => sheetMessage = 'Seleccioná al menos un movimiento para importar.');
+                return;
+              }
+              try {
+                final exactDuplicates = selected.where((draft) => _isExactImportDuplicate(draft, existingExpenses)).toList();
+                if (exactDuplicates.isNotEmpty) {
+                  setModalState(() => sheetMessage = 'Hay ${exactDuplicates.length} movimiento${exactDuplicates.length == 1 ? '' : 's'} idéntico${exactDuplicates.length == 1 ? '' : 's'} a gastos ya cargados. Desmarcalos o modificá algún dato antes de importar.');
+                  return;
+                }
+                final total = selected.fold<double>(0, (sum, draft) => sum + _parseMoneyInput(draft.amountController.text));
+                final confirmed = await _confirmImportCardExpenses(selected.length, total);
+                if (!confirmed) return;
+                setModalState(() {
+                  busy = true;
+                  sheetMessage = 'Importando movimientos seleccionados...';
+                });
+                var imported = 0;
+                for (final draft in selected) {
+                  final note = draft.noteController.text.trim();
+                  final description = draft.descriptionController.text.trim().isEmpty ? 'Movimiento importado de tarjeta' : draft.descriptionController.text.trim();
+                  await widget.api.createExpense(
+                    paidByMemberId: draft.paidByMemberId,
+                    amount: _parseMoneyInput(draft.amountController.text),
+                    category: draft.categoryController.text.trim().isEmpty ? 'General' : draft.categoryController.text.trim(),
+                    description: note.isEmpty ? description : '$description · $note',
+                    date: _parseCardImportDate(draft.dateController.text),
+                  );
+                  imported += 1;
+                }
+                await _refresh();
+                if (mounted) {
+                  Navigator.pop(context);
+                  closedAfterImport = true;
+                }
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Se importaron $imported gasto${imported == 1 ? '' : 's'} común${imported == 1 ? '' : 'es'} desde el resumen.')));
+                }
+              } on FormatException {
+                setModalState(() => sheetMessage = 'Revisá fechas y montos antes de importar.');
+              } catch (e) {
+                setModalState(() => sheetMessage = friendlyMessage(e));
+              } finally {
+                if (mounted && !closedAfterImport) setModalState(() => busy = false);
+              }
+            }
+
+            return _SheetFrame(
+              title: 'Importar resumen de tarjeta',
+              subtitle: 'Seleccioná solo consumos de la casa. Nada se carga sin confirmación.',
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AppCard(
+                    padding: const EdgeInsets.all(12),
+                    color: kLavender,
+                    border: Border.all(color: kPrimary.withOpacity(0.12)),
+                    child: Text(sheetMessage, style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, height: 1.25)),
+                  ),
+                  if (preview.warnings.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    AppCard(
+                      padding: const EdgeInsets.all(12),
+                      color: kWarning.withOpacity(0.08),
+                      border: Border.all(color: kWarning.withOpacity(0.18)),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Advertencias de lectura', style: TextStyle(color: kInk, fontWeight: FontWeight.w900)),
+                          const SizedBox(height: 6),
+                          for (final warning in preview.warnings.take(4))
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: Text('• $warning', style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, height: 1.25)),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  AppCard(
+                    padding: const EdgeInsets.all(12),
+                    color: Colors.white.withOpacity(0.92),
+                    border: Border.all(color: kPrimary.withOpacity(0.10)),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${selectedDrafts.length} seleccionado${selectedDrafts.length == 1 ? '' : 's'} · ${money.format(selectedTotal)}',
+                            style: const TextStyle(color: kInk, fontWeight: FontWeight.w900),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: busy
+                              ? null
+                              : () => setModalState(() {
+                                    final selectAll = drafts.any((draft) => !draft.selected);
+                                    for (final draft in drafts) {
+                                      draft.selected = selectAll;
+                                    }
+                                  }),
+                          child: Text(drafts.any((draft) => !draft.selected) ? 'Seleccionar todo' : 'Desmarcar todo'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (drafts.isEmpty)
+                    const Text('No hay movimientos para mostrar.', style: TextStyle(color: kMuted, fontWeight: FontWeight.w700))
+                  else
+                    for (var i = 0; i < drafts.length; i++) ...[
+                      _CardImportDraftCard(
+                        draft: drafts[i],
+                        members: members,
+                        money: money,
+                        enabled: !busy,
+                        onChanged: () => setModalState(() {}),
+                        onDiscard: () => setModalState(() => drafts[i].selected = false),
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                  const SizedBox(height: 12),
+                  BigActionButton(
+                    onPressed: busy || selectedDrafts.isEmpty ? null : importSelected,
+                    icon: Icons.playlist_add_check_circle_outlined,
+                    title: busy ? 'Importando...' : 'Importar seleccionados como gastos comunes',
+                    subtitle: 'Se cargarán en el período $month. Podés borrar gastos luego desde “Ver gastos del mes”.',
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Tip: desmarcá consumos personales o movimientos del resumen que no correspondan a la casa.',
+                    style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, height: 1.25),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      );
+    } finally {
+      for (final draft in drafts) {
+        draft.dispose();
+      }
+    }
   }
 
   Future<void> _showExpenseSheet() async {
@@ -1349,6 +2068,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       backgroundColor: Colors.transparent,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => _SheetFrame(
@@ -1400,6 +2121,278 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
+
+
+
+class _CardImportDraft {
+  bool selected;
+  bool possibleDuplicate;
+  int paidByMemberId;
+  final TextEditingController dateController;
+  final TextEditingController descriptionController;
+  final TextEditingController amountController;
+  final TextEditingController categoryController;
+  final TextEditingController noteController;
+  final String rawText;
+  final double confidence;
+
+  _CardImportDraft({
+    required this.selected,
+    required this.possibleDuplicate,
+    required this.paidByMemberId,
+    required this.dateController,
+    required this.descriptionController,
+    required this.amountController,
+    required this.categoryController,
+    required this.noteController,
+    required this.rawText,
+    required this.confidence,
+  });
+
+  factory _CardImportDraft.fromPreview({required CardImportPreviewItem item, required int defaultPaidByMemberId, required String dateText}) {
+    return _CardImportDraft(
+      selected: true,
+      possibleDuplicate: false,
+      paidByMemberId: defaultPaidByMemberId,
+      dateController: TextEditingController(text: dateText),
+      descriptionController: TextEditingController(text: item.description),
+      amountController: TextEditingController(text: item.amount.toStringAsFixed(0)),
+      categoryController: TextEditingController(text: item.category.isEmpty ? 'General' : item.category),
+      noteController: TextEditingController(text: 'Importado desde resumen de tarjeta'),
+      rawText: item.rawText,
+      confidence: item.confidence,
+    );
+  }
+
+  void dispose() {
+    dateController.dispose();
+    descriptionController.dispose();
+    amountController.dispose();
+    categoryController.dispose();
+    noteController.dispose();
+  }
+}
+
+class _CardImportDraftCard extends StatelessWidget {
+  final _CardImportDraft draft;
+  final List<Member> members;
+  final NumberFormat money;
+  final bool enabled;
+  final VoidCallback onChanged;
+  final VoidCallback onDiscard;
+
+  const _CardImportDraftCard({
+    required this.draft,
+    required this.members,
+    required this.money,
+    required this.enabled,
+    required this.onChanged,
+    required this.onDiscard,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final amount = double.tryParse(draft.amountController.text.trim().replaceAll('.', '').replaceAll(',', '.')) ?? 0;
+    return AppCard(
+      padding: const EdgeInsets.all(14),
+      color: draft.selected ? Colors.white.withOpacity(0.94) : Colors.white.withOpacity(0.62),
+      border: Border.all(color: draft.possibleDuplicate ? kWarning.withOpacity(0.34) : kPrimary.withOpacity(0.12)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Checkbox(
+                value: draft.selected,
+                onChanged: enabled
+                    ? (value) {
+                        draft.selected = value ?? false;
+                        onChanged();
+                      }
+                    : null,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      draft.descriptionController.text.trim().isEmpty ? 'Movimiento importado' : draft.descriptionController.text.trim(),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: kInk, fontWeight: FontWeight.w900, fontSize: 15),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${money.format(amount)} · confianza ${(draft.confidence * 100).round()}%',
+                      style: const TextStyle(color: kPrimary, fontWeight: FontWeight.w900),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Descartar movimiento',
+                onPressed: enabled ? onDiscard : null,
+                icon: const Icon(Icons.delete_outline, color: kDanger),
+              ),
+            ],
+          ),
+          if (draft.possibleDuplicate) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: kWarning.withOpacity(0.10), borderRadius: BorderRadius.circular(16)),
+              child: const Text(
+                'Posible duplicado: revisá si ya fue cargado como gasto común.',
+                style: TextStyle(color: kMuted, fontWeight: FontWeight.w800, height: 1.25),
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          TextField(
+            enabled: enabled && draft.selected,
+            controller: draft.descriptionController,
+            onChanged: (_) => onChanged(),
+            decoration: const InputDecoration(labelText: 'Descripción'),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  enabled: enabled && draft.selected,
+                  controller: draft.dateController,
+                  onChanged: (_) => onChanged(),
+                  decoration: const InputDecoration(labelText: 'Fecha'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  enabled: enabled && draft.selected,
+                  controller: draft.amountController,
+                  onChanged: (_) => onChanged(),
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9\.,]'))],
+                  decoration: const InputDecoration(labelText: 'Monto'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            enabled: enabled && draft.selected,
+            controller: draft.categoryController,
+            onChanged: (_) => onChanged(),
+            decoration: const InputDecoration(labelText: 'Categoría'),
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<int>(
+            value: members.any((member) => member.id == draft.paidByMemberId) ? draft.paidByMemberId : members.first.id,
+            items: members.map((member) => DropdownMenuItem(value: member.id, child: Text('Pagó ${member.name}'))).toList(),
+            onChanged: enabled && draft.selected
+                ? (value) {
+                    draft.paidByMemberId = value ?? draft.paidByMemberId;
+                    onChanged();
+                  }
+                : null,
+            decoration: const InputDecoration(labelText: 'Quién pagó'),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            enabled: enabled && draft.selected,
+            controller: draft.noteController,
+            onChanged: (_) => onChanged(),
+            decoration: const InputDecoration(labelText: 'Nota interna'),
+          ),
+          if (draft.rawText.trim().isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Origen: ${draft.rawText}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: kMuted, fontSize: 11, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _FixedExpenseTemplateCard extends StatelessWidget {
+  final FixedExpenseTemplateItem template;
+  final String memberName;
+  final NumberFormat money;
+  final bool busy;
+  final VoidCallback? onGenerate;
+  final VoidCallback onEdit;
+  final ValueChanged<bool> onToggleActive;
+
+  const _FixedExpenseTemplateCard({
+    required this.template,
+    required this.memberName,
+    required this.money,
+    required this.busy,
+    required this.onGenerate,
+    required this.onEdit,
+    required this.onToggleActive,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      padding: const EdgeInsets.all(14),
+      color: template.active ? Colors.white.withOpacity(0.94) : Colors.white.withOpacity(0.72),
+      border: Border.all(color: template.active ? kPrimary.withOpacity(0.12) : kMuted.withOpacity(0.12)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(color: kSuccess.withOpacity(0.12), borderRadius: BorderRadius.circular(16)),
+                child: Icon(Icons.event_repeat_outlined, color: template.active ? kSuccess : kMuted),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(template.name, style: const TextStyle(color: kInk, fontWeight: FontWeight.w900, fontSize: 15)),
+                    const SizedBox(height: 3),
+                    Text('${money.format(template.amount)} · ${template.category}', style: const TextStyle(color: kPrimary, fontWeight: FontWeight.w900)),
+                    const SizedBox(height: 3),
+                    Text(memberName, style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, fontSize: 12)),
+                  ],
+                ),
+              ),
+              Switch(value: template.active, onChanged: busy ? null : onToggleActive),
+            ],
+          ),
+          if (template.notes.trim().isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(template.notes, style: const TextStyle(color: kMuted, fontWeight: FontWeight.w600, height: 1.25)),
+          ],
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(onPressed: busy ? null : onEdit, icon: const Icon(Icons.edit_outlined), label: const Text('Editar')),
+              FilledButton.icon(onPressed: busy ? null : onGenerate, icon: const Icon(Icons.add_task_outlined), label: const Text('Generar este mes')),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _ShortcutMetricCard extends StatelessWidget {
   final double width;

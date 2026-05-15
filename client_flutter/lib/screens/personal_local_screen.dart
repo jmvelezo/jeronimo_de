@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../models/app_models.dart';
 import '../models/local_personal_models.dart';
+import '../services/api_service.dart';
 import '../services/local_personal_store.dart';
 import '../services/friendly_messages.dart';
 import '../widgets/app_card.dart';
@@ -23,13 +25,46 @@ class _PersonalQuickAction {
   const _PersonalQuickAction(this.icon, this.label, this.onTap);
 }
 
+class _HouseholdImpact {
+  final String month;
+  final String memberName;
+  final double householdIncome;
+  final double householdSharedCost;
+  final double householdPaidByMe;
+  final double provisionalBalance;
+  final double formalDebtIowe;
+  final double formalDebtOwedToMe;
+  final double creditAvailable;
+  final double localPersonalExpense;
+  final double estimatedAvailable;
+
+  const _HouseholdImpact({
+    required this.month,
+    required this.memberName,
+    required this.householdIncome,
+    required this.householdSharedCost,
+    required this.householdPaidByMe,
+    required this.provisionalBalance,
+    required this.formalDebtIowe,
+    required this.formalDebtOwedToMe,
+    required this.creditAvailable,
+    required this.localPersonalExpense,
+    required this.estimatedAvailable,
+  });
+}
+
 class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
   static const double _desktopContentMaxWidth = 1280;
   final store = LocalPersonalStore();
   final money = NumberFormat.currency(locale: 'es_AR', symbol: r'$ ', decimalDigits: 0);
   bool loading = true;
+  bool householdImpactLoading = false;
+  bool householdImpactAvailable = false;
+  bool showHouseholdImpact = true;
   String? error;
+  String? householdImpactError;
   PersonalLocalSnapshot? snapshot;
+  _HouseholdImpact? householdImpact;
 
   @override
   void initState() {
@@ -45,10 +80,100 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
     try {
       final loaded = await store.loadSnapshot();
       if (mounted) setState(() => snapshot = loaded);
+      await _loadHouseholdImpact(loaded);
     } catch (e) {
       if (mounted) setState(() => error = friendlyMessage(e));
     } finally {
       if (mounted) setState(() => loading = false);
+    }
+  }
+
+  Future<void> _loadHouseholdImpact(PersonalLocalSnapshot data) async {
+    try {
+      final api = await ApiService.load();
+      if (api.token == null || api.token!.trim().isEmpty) {
+        if (mounted) {
+          setState(() {
+            householdImpactAvailable = false;
+            householdImpactLoading = false;
+            householdImpactError = null;
+            householdImpact = null;
+          });
+        }
+        return;
+      }
+      if (mounted) {
+        setState(() {
+          householdImpactAvailable = true;
+          householdImpactLoading = true;
+          householdImpactError = null;
+        });
+      }
+
+      final currentMember = await api.getMe();
+      final activePeriod = await api.getActivePeriod();
+      final activeMonth = activePeriod.activeMonth.isNotEmpty ? activePeriod.activeMonth : data.month;
+      final results = await Future.wait<dynamic>([
+        api.getSummary(activeMonth),
+        api.getExpenses(activeMonth),
+        api.getDebts(includeCancelled: false),
+        api.getCreditBalances(activeOnly: true),
+      ]);
+      final summary = results[0] as MonthSummary;
+      final sharedExpenses = results[1] as List<ExpenseItem>;
+      final debts = results[2] as List<DebtItem>;
+      final credits = results[3] as List<CreditBalanceItem>;
+      MemberSummary? memberSummary;
+      for (final item in summary.members) {
+        if (item.memberId == currentMember.id) {
+          memberSummary = item;
+          break;
+        }
+      }
+      final activeDebts = debts.where((item) => item.status != 'cancelled' && item.status != 'paid').toList();
+      final formalDebtIowe = activeDebts
+          .where((item) => item.debtorMemberId == currentMember.id)
+          .fold(0.0, (sum, item) => sum + item.remainingAmount);
+      final formalDebtOwedToMe = activeDebts
+          .where((item) => item.creditorMemberId == currentMember.id)
+          .fold(0.0, (sum, item) => sum + item.remainingAmount);
+      final creditAvailable = credits
+          .where((item) => item.ownerMemberId == currentMember.id && item.remainingAmount > 0)
+          .fold(0.0, (sum, item) => sum + item.remainingAmount);
+      final householdPaidByMe = sharedExpenses
+          .where((item) => item.paidByMemberId == currentMember.id)
+          .fold(0.0, (sum, item) => sum + item.amount);
+      final householdIncome = memberSummary?.income ?? 0;
+      final householdSharedCost = memberSummary?.shouldPay ?? 0;
+      final estimatedAvailable = householdIncome - data.monthlyExpense - householdSharedCost;
+
+      if (mounted) {
+        setState(() {
+          householdImpact = _HouseholdImpact(
+            month: activeMonth,
+            memberName: currentMember.name,
+            householdIncome: householdIncome,
+            householdSharedCost: householdSharedCost,
+            householdPaidByMe: householdPaidByMe,
+            provisionalBalance: memberSummary?.balance ?? 0,
+            formalDebtIowe: formalDebtIowe,
+            formalDebtOwedToMe: formalDebtOwedToMe,
+            creditAvailable: creditAvailable,
+            localPersonalExpense: data.monthlyExpense,
+            estimatedAvailable: estimatedAvailable,
+          );
+          householdImpactLoading = false;
+          householdImpactError = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          householdImpactAvailable = true;
+          householdImpactLoading = false;
+          householdImpactError = 'No pude leer ahora el impacto del hogar compartido. Tu modo personal sigue funcionando.';
+        });
+      }
     }
   }
 
@@ -86,6 +211,8 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
                         const SizedBox(height: 12),
                         _summaryCard(data),
                         const SizedBox(height: 12),
+                        _householdImpactCard(data),
+                        if (householdImpactAvailable || householdImpactLoading || householdImpactError != null) const SizedBox(height: 12),
                         _personalAiCard(data),
                         const SizedBox(height: 12),
                         _quickActionsCard(data),
@@ -200,6 +327,97 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
     );
   }
 
+
+  Widget _householdImpactCard(PersonalLocalSnapshot data) {
+    if (!householdImpactAvailable && !householdImpactLoading && householdImpactError == null) {
+      return const SizedBox.shrink();
+    }
+    final impact = householdImpact;
+    return AppCard(
+      border: Border.all(color: Colors.indigo.withOpacity(0.14)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: SectionTitle(
+                  title: 'Impacto del hogar compartido',
+                  subtitle: impact == null ? 'Lectura opcional del modo hogar, sin crear gastos personales.' : 'Lectura de ${impact.memberName} · ${impact.month}',
+                  icon: Icons.home_work_outlined,
+                ),
+              ),
+              TextButton.icon(
+                onPressed: () => setState(() => showHouseholdImpact = !showHouseholdImpact),
+                icon: Icon(showHouseholdImpact ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+                label: Text(showHouseholdImpact ? 'Ocultar' : 'Mostrar'),
+              ),
+            ],
+          ),
+          if (!showHouseholdImpact)
+            const Text('Bloque oculto. El modo personal local no fue modificado.', style: TextStyle(color: Colors.black54))
+          else if (householdImpactLoading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 10),
+              child: LinearProgressIndicator(),
+            )
+          else if (householdImpactError != null)
+            Text(householdImpactError!, style: const TextStyle(color: Colors.black54))
+          else if (impact != null) ...[
+            const Text(
+              'Solo lectura: no crea gastos personales ni duplica movimientos.',
+              style: TextStyle(color: Colors.black54, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 12),
+            _line('Ingreso declarado en Casa', money.format(impact.householdIncome), Icons.payments_outlined, Colors.green),
+            _line('Costo proporcional hogar', money.format(impact.householdSharedCost), Icons.pie_chart_outline, kPrimary),
+            _line('Pagado por mí en Casa', money.format(impact.householdPaidByMe), Icons.receipt_long_outlined, Colors.indigo),
+            _line('Saldo provisorio con Casa', _householdBalanceText(impact.provisionalBalance), Icons.compare_arrows_rounded, _balanceColor(impact.provisionalBalance)),
+            _line('Deudas formales que debo', money.format(impact.formalDebtIowe), Icons.warning_amber_rounded, impact.formalDebtIowe > 0 ? Colors.red : Colors.black45),
+            _line('Deudas formales a mi favor', money.format(impact.formalDebtOwedToMe), Icons.volunteer_activism_outlined, impact.formalDebtOwedToMe > 0 ? Colors.green : Colors.black45),
+            _line('Crédito disponible', money.format(impact.creditAvailable), Icons.savings_outlined, impact.creditAvailable > 0 ? Colors.green : Colors.black45),
+            const Divider(height: 22),
+            _line('Gastos personales locales', money.format(impact.localPersonalExpense), Icons.lock_person_outlined, Colors.deepOrange),
+            _line('Disponible estimado', money.format(impact.estimatedAvailable), Icons.account_balance_wallet_outlined, impact.estimatedAvailable >= 0 ? Colors.green : Colors.red),
+            const SizedBox(height: 8),
+            const Text(
+              'El disponible estimado usa: ingreso de Casa - gastos personales locales - costo proporcional del hogar. No reemplaza el balance completo de la casa.',
+              style: TextStyle(color: Colors.black54, height: 1.25),
+            ),
+            const SizedBox(height: 12),
+            if (data.activeAccounts.isEmpty)
+              const Text(
+                'Para registrar este impacto en Personal, primero agregá una cuenta personal.',
+                style: TextStyle(color: Colors.black54, fontWeight: FontWeight.w600),
+              )
+            else if (impact.householdSharedCost <= 0 && impact.householdPaidByMe <= 0)
+              const Text(
+                'No hay montos del hogar para convertir en gasto personal en este período.',
+                style: TextStyle(color: Colors.black54, fontWeight: FontWeight.w600),
+              )
+            else
+              ElevatedButton.icon(
+                onPressed: () => _showHouseholdImpactSyncSheet(data, impact),
+                icon: const Icon(Icons.add_link_outlined),
+                label: const Text('Agregar impacto del hogar a Personal'),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _householdBalanceText(double value) {
+    if (value > 0) return 'Te deben ${money.format(value)}';
+    if (value < 0) return 'Debés ${money.format(value.abs())}';
+    return 'Equilibrado';
+  }
+
+  Color _balanceColor(double value) {
+    if (value > 0) return Colors.green;
+    if (value < 0) return Colors.red;
+    return Colors.black54;
+  }
 
   Widget _personalAiCard(PersonalLocalSnapshot data) {
     final latest = data.latestAiReport;
@@ -589,6 +807,8 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => Padding(
           padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
@@ -639,6 +859,180 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
     );
   }
 
+  Future<void> _showHouseholdImpactSyncSheet(PersonalLocalSnapshot data, _HouseholdImpact impact) async {
+    if (data.activeAccounts.isEmpty) return;
+    final options = <String, double>{
+      'proportional_cost': impact.householdSharedCost,
+      'paid_by_me': impact.householdPaidByMe,
+    };
+    String selectedType = options.entries.firstWhere((entry) => entry.value > 0, orElse: () => options.entries.first).key;
+    PersonalAccount selectedAccount = data.activeAccounts.first;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setModalState) {
+          final amount = options[selectedType] ?? 0;
+          final duplicate = _hasHouseholdSyncedExpense(data, selectedType, impact.month);
+          final description = _householdSyncDescription(selectedType, impact);
+          final canSave = amount > 0 && !duplicate;
+
+          return Padding(
+            padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Agregar impacto del hogar a Personal', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Esto crea un gasto personal local y no modifica los gastos comunes del hogar. Elegí una sola lectura para evitar duplicados.',
+                    style: TextStyle(color: Colors.black54, height: 1.25),
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<PersonalAccount>(
+                    value: selectedAccount,
+                    items: data.activeAccounts.map((item) => DropdownMenuItem(value: item, child: Text(item.name))).toList(),
+                    onChanged: (value) => setModalState(() => selectedAccount = value ?? selectedAccount),
+                    decoration: const InputDecoration(labelText: 'Cuenta personal'),
+                  ),
+                  const SizedBox(height: 12),
+                  RadioListTile<String>(
+                    contentPadding: EdgeInsets.zero,
+                    value: 'proportional_cost',
+                    groupValue: selectedType,
+                    onChanged: impact.householdSharedCost > 0 ? (value) => setModalState(() => selectedType = value ?? selectedType) : null,
+                    title: Text('Costo proporcional del hogar · ${money.format(impact.householdSharedCost)}'),
+                    subtitle: const Text('Lo que te correspondía pagar del hogar. Útil para medir tu costo mensual real.'),
+                  ),
+                  RadioListTile<String>(
+                    contentPadding: EdgeInsets.zero,
+                    value: 'paid_by_me',
+                    groupValue: selectedType,
+                    onChanged: impact.householdPaidByMe > 0 ? (value) => setModalState(() => selectedType = value ?? selectedType) : null,
+                    title: Text('Pagos reales hechos por mí · ${money.format(impact.householdPaidByMe)}'),
+                    subtitle: const Text('Lo que salió efectivamente de tus cuentas para gastos comunes.'),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: kPrimary.withOpacity(0.07),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: kPrimary.withOpacity(0.12)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Se registrará: ${money.format(amount)}', style: const TextStyle(fontWeight: FontWeight.w900)),
+                        const SizedBox(height: 4),
+                        Text(description, style: const TextStyle(color: Colors.black54)),
+                        const SizedBox(height: 4),
+                        const Text('Categoría sugerida: Hogar compartido', style: TextStyle(color: Colors.black54)),
+                      ],
+                    ),
+                  ),
+                  if (duplicate) ...[
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Ya existe un gasto personal creado desde el hogar para este período y este tipo de impacto. Eliminá ese movimiento si querés volver a crearlo.',
+                      style: TextStyle(color: Colors.red, fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('No sincronizar'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: canSave
+                              ? () async {
+                                  await _createHouseholdImpactExpense(data, impact, selectedAccount, selectedType, amount, description);
+                                  if (mounted) Navigator.pop(context);
+                                  await _load();
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Impacto del hogar agregado a Personal.')));
+                                  }
+                                }
+                              : null,
+                          child: const Text('Guardar gasto'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  bool _hasHouseholdSyncedExpense(PersonalLocalSnapshot data, String sourceType, String sourceMonth) {
+    return data.expenses.any((item) => item.source == 'household' && item.sourceType == sourceType && item.sourceMonth == sourceMonth);
+  }
+
+  String _householdSyncDescription(String sourceType, _HouseholdImpact impact) {
+    if (sourceType == 'paid_by_me') {
+      return 'Pagos reales hechos por mí en la casa · ${impact.month}';
+    }
+    return 'Costo proporcional del hogar · ${impact.month}';
+  }
+
+  DateTime _personalExpenseDateFor(PersonalLocalSnapshot data) {
+    final parts = data.month.split('-');
+    if (parts.length == 2) {
+      final year = int.tryParse(parts[0]);
+      final month = int.tryParse(parts[1]);
+      if (year != null && month != null && month >= 1 && month <= 12) {
+        return DateTime(year, month, 1);
+      }
+    }
+    return DateTime.now();
+  }
+
+  Future<PersonalCategory> _householdSharedCategory(PersonalLocalSnapshot data) async {
+    for (final category in data.categories) {
+      final name = category.name.toLowerCase().trim();
+      if (category.id == 'hogar_compartido' || name == 'hogar compartido') return category;
+    }
+    return store.createCategory(name: 'Hogar compartido');
+  }
+
+  Future<void> _createHouseholdImpactExpense(
+    PersonalLocalSnapshot data,
+    _HouseholdImpact impact,
+    PersonalAccount account,
+    String sourceType,
+    double amount,
+    String description,
+  ) async {
+    if (amount <= 0) return;
+    final category = await _householdSharedCategory(data);
+    await store.createExpense(
+      accountId: account.id,
+      amount: amount,
+      category: category,
+      description: description,
+      date: _personalExpenseDateFor(data),
+      source: 'household',
+      sourceMonth: impact.month,
+      sourceType: sourceType,
+    );
+  }
+
   Future<void> _showAccountSheet() async {
     final nameController = TextEditingController(text: 'Efectivo');
     final typeController = TextEditingController(text: 'efectivo');
@@ -681,6 +1075,8 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => Padding(
           padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
@@ -725,6 +1121,8 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => Padding(
           padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
@@ -771,6 +1169,8 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => Padding(
           padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
@@ -824,6 +1224,8 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => Padding(
           padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
@@ -895,6 +1297,8 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => Padding(
           padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
@@ -969,6 +1373,8 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => Padding(
         padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
         child: SingleChildScrollView(

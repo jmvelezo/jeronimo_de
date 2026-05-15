@@ -14,15 +14,38 @@ if database_url.startswith("sqlite"):
 engine = create_engine(database_url, echo=False, connect_args=connect_args, pool_pre_ping=True)
 
 
-def _ensure_lightweight_migrations() -> None:
-    """Pequeñas migraciones tolerantes para bases locales ya creadas.
+def _table_columns(conn, table_name: str) -> set[str]:
+    if settings.sqlalchemy_database_url.startswith("sqlite"):
+        rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
+        return {row[1] for row in rows}
+    rows = conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name=:table_name"
+        ),
+        {"table_name": table_name},
+    ).fetchall()
+    return {row[0] for row in rows}
 
-    SQLModel crea tablas nuevas, pero no agrega columnas en SQLite existente.
-    Esta función evita romper instalaciones de prueba al sumar campos simples.
-    """
-    if not settings.sqlalchemy_database_url.startswith("sqlite"):
+
+def _add_column_if_missing(conn, table_name: str, column_name: str, ddl: str) -> None:
+    if column_name in _table_columns(conn, table_name):
         return
+    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}"))
+
+
+def _ensure_lightweight_migrations() -> None:
+    """Pequeñas migraciones tolerantes para bases ya creadas.
+
+    SQLModel crea tablas nuevas, pero no agrega columnas en bases existentes.
+    Esta función agrega solo columnas simples y necesarias, sin borrar datos.
+    """
     with engine.begin() as conn:
+        _add_column_if_missing(conn, "householdperiodsettings", "active_month_override", "VARCHAR(7)")
+
+        if not settings.sqlalchemy_database_url.startswith("sqlite"):
+            return
+
         rows = conn.execute(text("PRAGMA table_info(householdaisettings)")).fetchall()
         existing = {row[1] for row in rows}
         if rows and "analysis_frequency" not in existing:

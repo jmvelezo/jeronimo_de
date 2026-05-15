@@ -236,6 +236,9 @@ class PersonalExpense {
   final String description;
   final String date;
   final String month;
+  final String source;
+  final String sourceMonth;
+  final String sourceType;
 
   const PersonalExpense({
     required this.id,
@@ -246,7 +249,12 @@ class PersonalExpense {
     required this.description,
     required this.date,
     required this.month,
+    this.source = '',
+    this.sourceMonth = '',
+    this.sourceType = '',
   });
+
+  bool get isFromHousehold => source == 'household';
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -257,6 +265,9 @@ class PersonalExpense {
         'description': description,
         'date': date,
         'month': month,
+        'source': source,
+        'source_month': sourceMonth,
+        'source_type': sourceType,
       };
 
   factory PersonalExpense.fromJson(Map<String, dynamic> json) {
@@ -270,6 +281,9 @@ class PersonalExpense {
       description: json['description']?.toString() ?? '',
       date: json['date']?.toString() ?? '',
       month: json['month']?.toString() ?? '',
+      source: json['source']?.toString() ?? '',
+      sourceMonth: json['source_month']?.toString() ?? '',
+      sourceType: json['source_type']?.toString() ?? '',
     );
   }
 }

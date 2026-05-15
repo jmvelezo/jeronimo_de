@@ -332,6 +332,8 @@ class _TasksScreenState extends State<TasksScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       backgroundColor: Colors.transparent,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) {

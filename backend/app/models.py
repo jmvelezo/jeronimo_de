@@ -70,6 +70,7 @@ class HouseholdPeriodSettings(SQLModel, table=True):
     household_id: int = Field(foreign_key="household.id", index=True, unique=True)
     period_mode: str = Field(default="calendar", max_length=20, description="calendar|custom")
     start_day: int = Field(default=1, ge=1, le=28)
+    active_month_override: str | None = Field(default=None, max_length=7, index=True, description="Período operativo manual YYYY-MM")
     updated_by_member_id: int | None = Field(default=None, foreign_key="member.id")
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -120,6 +121,20 @@ class Expense(SQLModel, table=True):
     amount: float = Field(gt=0)
     description: str = ""
     is_shared: bool = True
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class FixedExpenseTemplate(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    household_id: int = Field(foreign_key="household.id", index=True)
+    name: str = Field(index=True, max_length=120)
+    amount: float = Field(gt=0)
+    category: str = Field(default="General", index=True, max_length=80)
+    default_paid_by_member_id: int | None = Field(default=None, foreign_key="member.id", index=True)
+    frequency: str = Field(default="monthly", max_length=20)
+    active: bool = Field(default=True, index=True)
+    notes: str = ""
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

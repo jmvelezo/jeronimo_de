@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/app_models.dart';
@@ -152,6 +153,13 @@ class ApiService {
     }
   }
 
+
+  Future<Member> getMe() async {
+    final response = await http.get(_uri('/auth/me'), headers: _headers);
+    if (response.statusCode != 200) throw Exception(_extractError(response));
+    return Member.fromJson(jsonDecode(response.body));
+  }
+
   Future<List<Member>> getMembers({bool includeInactive = false}) async {
     final response = await http.get(
       _uri('/household/members', {'include_inactive': includeInactive.toString()}),
@@ -198,6 +206,93 @@ class ApiService {
       body: jsonEncode({'member_id': memberId, 'month': month, 'amount': amount}),
     );
     if (response.statusCode != 200) throw Exception(_extractError(response));
+  }
+
+  Future<List<IncomeItem>> getIncome(String month) async {
+    final response = await http.get(_uri('/finance/income', {'month': month}), headers: _headers);
+    if (response.statusCode != 200) throw Exception(_extractError(response));
+    return (jsonDecode(response.body) as List).map((item) => IncomeItem.fromJson(item)).toList();
+  }
+
+  Future<List<FixedExpenseTemplateItem>> getFixedExpenses({bool activeOnly = true}) async {
+    final response = await http.get(_uri('/finance/fixed-expenses', {'active_only': activeOnly.toString()}), headers: _headers);
+    if (response.statusCode != 200) throw Exception(_extractError(response));
+    return (jsonDecode(response.body) as List).map((item) => FixedExpenseTemplateItem.fromJson(item)).toList();
+  }
+
+  Future<FixedExpenseTemplateItem> createFixedExpense({
+    required String name,
+    required double amount,
+    required String category,
+    int? defaultPaidByMemberId,
+    String notes = '',
+    bool active = true,
+  }) async {
+    final response = await http.post(
+      _uri('/finance/fixed-expenses'),
+      headers: _headers,
+      body: jsonEncode({
+        'name': name,
+        'amount': amount,
+        'category': category,
+        'default_paid_by_member_id': defaultPaidByMemberId,
+        'frequency': 'monthly',
+        'active': active,
+        'notes': notes,
+      }),
+    );
+    if (response.statusCode != 200) throw Exception(_extractError(response));
+    return FixedExpenseTemplateItem.fromJson(jsonDecode(response.body));
+  }
+
+  Future<FixedExpenseTemplateItem> updateFixedExpense({
+    required int templateId,
+    String? name,
+    double? amount,
+    String? category,
+    int? defaultPaidByMemberId,
+    bool clearDefaultPaidByMember = false,
+    String? notes,
+    bool? active,
+  }) async {
+    final body = <String, dynamic>{};
+    if (name != null) body['name'] = name;
+    if (amount != null) body['amount'] = amount;
+    if (category != null) body['category'] = category;
+    if (clearDefaultPaidByMember) {
+      body['default_paid_by_member_id'] = null;
+    } else if (defaultPaidByMemberId != null) {
+      body['default_paid_by_member_id'] = defaultPaidByMemberId;
+    }
+    if (notes != null) body['notes'] = notes;
+    if (active != null) body['active'] = active;
+    final response = await http.patch(_uri('/finance/fixed-expenses/$templateId'), headers: _headers, body: jsonEncode(body));
+    if (response.statusCode != 200) throw Exception(_extractError(response));
+    return FixedExpenseTemplateItem.fromJson(jsonDecode(response.body));
+  }
+
+  Future<ExpenseItem> generateFixedExpense({required int templateId, required String month}) async {
+    final response = await http.post(_uri('/finance/fixed-expenses/$templateId/generate', {'month': month}), headers: _headers);
+    if (response.statusCode != 200) throw Exception(_extractError(response));
+    return ExpenseItem.fromJson(jsonDecode(response.body));
+  }
+
+  Future<List<ExpenseItem>> generateFixedExpensesForMonth(String month) async {
+    final response = await http.post(_uri('/finance/fixed-expenses/generate-for-month', {'month': month}), headers: _headers);
+    if (response.statusCode != 200) throw Exception(_extractError(response));
+    return (jsonDecode(response.body) as List).map((item) => ExpenseItem.fromJson(item)).toList();
+  }
+
+
+
+  Future<CardImportPreviewResult> previewCardImportPdf({required Uint8List bytes, required String filename, String? month}) async {
+    final request = http.MultipartRequest('POST', _uri('/finance/card-imports/preview', {if (month != null) 'month': month}));
+    if (token != null) request.headers['Authorization'] = 'Bearer $token';
+    request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    final streamed = await request.send().timeout(const Duration(seconds: 60));
+    final response = await http.Response.fromStream(streamed);
+    if (response.statusCode != 200) throw Exception(_extractError(response));
+    return CardImportPreviewResult.fromJson(jsonDecode(response.body));
   }
 
   Future<void> createExpense({
@@ -353,11 +448,11 @@ class ApiService {
     if (response.statusCode != 200) throw Exception(_extractError(response));
   }
 
-  Future<MonthlyCloseItem> closeMonth(String month) async {
+  Future<MonthlyCloseItem> closeMonth(String month, {bool advanceToNext = false}) async {
     final response = await http.post(
       _uri('/finance/monthly-closes'),
       headers: _headers,
-      body: jsonEncode({'month': month}),
+      body: jsonEncode({'month': month, 'advance_to_next': advanceToNext}),
     );
     if (response.statusCode != 200) throw Exception(_extractError(response));
     return MonthlyCloseItem.fromJson(jsonDecode(response.body));

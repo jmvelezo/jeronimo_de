@@ -110,6 +110,54 @@ class ExpenseRead(BaseModel):
     is_shared: bool
 
 
+class CardImportPreviewItem(BaseModel):
+    date: date | None = None
+    description: str = ""
+    amount: float = Field(ge=0)
+    currency: str = "ARS"
+    category: str = "General"
+    confidence: float = Field(default=0.5, ge=0, le=1)
+    raw_text: str = ""
+
+
+class CardImportPreviewResponse(BaseModel):
+    items: list[CardImportPreviewItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class FixedExpenseTemplateCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    amount: float = Field(gt=0)
+    category: str = Field(default="General", max_length=80)
+    default_paid_by_member_id: int | None = None
+    frequency: str = Field(default="monthly", max_length=20)
+    active: bool = True
+    notes: str = ""
+
+
+class FixedExpenseTemplateUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=120)
+    amount: float | None = Field(default=None, gt=0)
+    category: str | None = Field(default=None, max_length=80)
+    default_paid_by_member_id: int | None = None
+    frequency: str | None = Field(default=None, max_length=20)
+    active: bool | None = None
+    notes: str | None = None
+
+
+class FixedExpenseTemplateRead(BaseModel):
+    id: int
+    name: str
+    amount: float
+    category: str
+    default_paid_by_member_id: int | None = None
+    frequency: str
+    active: bool
+    notes: str
+    created_at: datetime
+    updated_at: datetime
+
+
 class MemberSummary(BaseModel):
     member_id: int
     name: str
@@ -234,6 +282,8 @@ class HouseholdPeriodSettingsRead(BaseModel):
     period_start: date
     period_end: date
     label: str
+    active_month_override: str | None = None
+    is_manual: bool = False
 
 
 class HouseholdPeriodSettingsUpdate(BaseModel):
@@ -251,6 +301,7 @@ class DebtCancel(BaseModel):
 
 class MonthCloseCreate(BaseModel):
     month: str = Field(pattern=r"^\d{4}-\d{2}$")
+    advance_to_next: bool = False
 
 
 class MonthReopen(BaseModel):

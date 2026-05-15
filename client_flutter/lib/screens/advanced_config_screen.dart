@@ -559,6 +559,8 @@ class _AdvancedConfigScreenState extends State<AdvancedConfigScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => Padding(
           padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),

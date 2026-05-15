@@ -157,7 +157,16 @@ class LocalPersonalStore {
     await prefs.setString(_incomesKey, jsonEncode(items.map((item) => item.toJson()).toList()));
   }
 
-  Future<PersonalExpense> createExpense({required String accountId, required double amount, required PersonalCategory category, String description = '', DateTime? date}) async {
+  Future<PersonalExpense> createExpense({
+    required String accountId,
+    required double amount,
+    required PersonalCategory category,
+    String description = '',
+    DateTime? date,
+    String source = '',
+    String sourceMonth = '',
+    String sourceType = '',
+  }) async {
     final snapshot = await loadSnapshot();
     final usedDate = date ?? DateTime.now();
     final item = PersonalExpense(
@@ -169,6 +178,9 @@ class LocalPersonalStore {
       description: description.trim(),
       date: _dateOnly(usedDate),
       month: _monthOf(usedDate),
+      source: source.trim(),
+      sourceMonth: sourceMonth.trim(),
+      sourceType: sourceType.trim(),
     );
     await _saveExpenses([...snapshot.expenses, item]);
     return item;

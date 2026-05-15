@@ -36,6 +36,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
     _load();
   }
 
+  String _nextMonth(String month) {
+    final parts = month.split('-');
+    final year = int.tryParse(parts.first) ?? DateTime.now().year;
+    final mon = int.tryParse(parts.length > 1 ? parts[1] : '') ?? DateTime.now().month;
+    final next = DateTime(year, mon + 1, 1);
+    return "${next.year.toString().padLeft(4, '0')}-${next.month.toString().padLeft(2, '0')}";
+  }
+
   Future<void> _load() async {
     setState(() {
       loading = true;
@@ -52,25 +60,50 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Future<void> _closeCurrentMonth() async {
+    var advanceToNext = true;
+    final nextMonth = _nextMonth(widget.currentMonth);
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Cerrar ${widget.currentMonth}'),
-        content: const Text('Se guarda una foto del mes. Luego no se podrán modificar ingresos, gastos ni deudas automáticas de ese mes hasta reabrirlo.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Cerrar mes')),
-        ],
+      barrierDismissible: false,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Cerrar ${widget.currentMonth}'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Se guarda una foto del mes. Luego no se podrán modificar ingresos, gastos ni deudas automáticas de ese mes hasta reabrirlo.',
+              ),
+              const SizedBox(height: 14),
+              CheckboxListTile(
+                value: advanceToNext,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: Text('Pasar al período $nextMonth vacío'),
+                subtitle: const Text('No se borran los datos cerrados. Se abre un nuevo período para cargar ingresos y gastos desde cero.'),
+                onChanged: (value) => setDialogState(() => advanceToNext = value ?? true),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+            ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Cerrar mes')),
+          ],
+        ),
       ),
     );
     if (confirmed != true) return;
 
     try {
-      await widget.api.closeMonth(widget.currentMonth);
+      await widget.api.closeMonth(widget.currentMonth, advanceToNext: advanceToNext);
       await _load();
       await widget.onChanged();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Mes cerrado y guardado en historial.')));
+        final message = advanceToNext
+            ? 'Mes cerrado. Se abrió el período $nextMonth para empezar de cero.'
+            : 'Mes cerrado y guardado en historial.';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
       }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
@@ -80,6 +113,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Future<void> _reopenMonth(String month) async {
     final confirmed = await showDialog<bool>(
       context: context,
+      barrierDismissible: false,
       builder: (context) => AlertDialog(
         title: Text('Reabrir $month'),
         content: const Text('El cierre se elimina para permitir correcciones. Los gastos y deudas ya cargadas no se borran.'),
@@ -127,7 +161,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     label: const Text('Cerrar mes activo'),
                   ),
                   const SizedBox(height: 8),
-                  const Text('El cierre protege el mes contra cambios accidentales y deja una foto para comparar después.'),
+                  const Text('El cierre protege el mes contra cambios accidentales. Si pasás al siguiente período, ingresos y gastos arrancan vacíos sin borrar el historial.'),
                 ],
               ),
             ),

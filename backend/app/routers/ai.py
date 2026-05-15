@@ -7,12 +7,18 @@ from ..config import get_settings
 from ..database import get_session
 from ..models import (
     AiReport,
+    CreditBalance,
+    CreditBalanceStatus,
     Debt,
     DebtStatus,
     Expense,
+    FixedExpenseTemplate,
     HouseholdAiSettings,
     HouseholdTask,
     Member,
+    MonthlyAdvancePayment,
+    MonthlyClose,
+    PaymentStatus,
     TaskStatus,
     utc_now,
 )
@@ -279,6 +285,178 @@ def _sum_expenses_by_category(expenses: list[Expense]) -> list[dict]:
     ]
 
 
+def _month_shift(month: str, delta: int) -> str:
+    """Desplaza YYYY-MM sin depender de funciones internas de finance.py."""
+    try:
+        year, mon = [int(part) for part in month.split("-")]
+        idx = year * 12 + (mon - 1) + delta
+        return f"{idx // 12:04d}-{idx % 12 + 1:02d}"
+    except Exception:
+        today = date.today()
+        return f"{today.year:04d}-{today.month:02d}"
+
+
+def _category_variations(current: list[dict], previous: list[dict]) -> list[dict]:
+    previous_map = {str(item.get("category") or "General"): float(item.get("amount") or 0) for item in previous}
+    variations: list[dict] = []
+    for item in current:
+        category = str(item.get("category") or "General")
+        current_amount = float(item.get("amount") or 0)
+        previous_amount = float(previous_map.get(category) or 0)
+        delta = current_amount - previous_amount
+        variation_pct = (delta / previous_amount * 100) if previous_amount else None
+        variations.append(
+            {
+                "category": category,
+                "current_amount": round(current_amount, 2),
+                "previous_amount": round(previous_amount, 2),
+                "delta_amount": round(delta, 2),
+                "variation_pct": round(variation_pct, 2) if variation_pct is not None else None,
+                "status": "new" if previous_amount == 0 and current_amount > 0 else ("up" if delta > 0 else ("down" if delta < 0 else "stable")),
+            }
+        )
+    for category, previous_amount in previous_map.items():
+        if not any(item.get("category") == category for item in variations):
+            variations.append(
+                {
+                    "category": category,
+                    "current_amount": 0,
+                    "previous_amount": round(previous_amount, 2),
+                    "delta_amount": round(-previous_amount, 2),
+                    "variation_pct": -100,
+                    "status": "down",
+                }
+            )
+    return sorted(variations, key=lambda item: abs(float(item.get("delta_amount") or 0)), reverse=True)
+
+
+def _expense_anomalies(current_expenses: list[Expense], previous_expenses: list[Expense]) -> list[dict]:
+    previous_by_category: dict[str, list[float]] = defaultdict(list)
+    for expense in previous_expenses:
+        previous_by_category[expense.category or "General"].append(float(expense.amount or 0))
+
+    anomalies: list[dict] = []
+    for expense in current_expenses:
+        category = expense.category or "General"
+        amount = float(expense.amount or 0)
+        previous_values = previous_by_category.get(category, [])
+        previous_avg = (sum(previous_values) / len(previous_values)) if previous_values else 0
+        is_large_new = not previous_values and amount > 0
+        is_spike = bool(previous_avg and amount >= previous_avg * 1.75 and amount - previous_avg >= 1000)
+        if is_large_new or is_spike:
+            anomalies.append(
+                {
+                    "expense_id": expense.id,
+                    "date": expense.date.isoformat() if expense.date else None,
+                    "category": category,
+                    "description": expense.description,
+                    "amount": round(amount, 2),
+                    "previous_category_average": round(previous_avg, 2),
+                    "reason": "gasto_nuevo_en_categoria" if is_large_new else "monto_muy_superior_al_promedio_previo",
+                }
+            )
+    return sorted(anomalies, key=lambda item: float(item.get("amount") or 0), reverse=True)[:8]
+
+
+def _settlement_metrics(summary: dict) -> dict:
+    settlements = summary.get("settlements") or []
+    total_to_settle = 0.0
+    biggest = None
+    for item in settlements:
+        amount = float(item.get("amount") or 0)
+        total_to_settle += amount
+        if biggest is None or amount > float(biggest.get("amount") or 0):
+            biggest = item
+    return {
+        "count": len(settlements),
+        "total_to_settle": round(total_to_settle, 2),
+        "biggest_settlement": biggest,
+    }
+
+
+def _read_fixed_templates(session: Session, household_id: int) -> list[dict]:
+    templates = session.exec(
+        select(FixedExpenseTemplate)
+        .where(FixedExpenseTemplate.household_id == household_id)
+        .order_by(FixedExpenseTemplate.active.desc(), FixedExpenseTemplate.name.asc())
+    ).all()
+    return [
+        {
+            "id": item.id,
+            "name": item.name,
+            "amount": round(float(item.amount or 0), 2),
+            "category": item.category,
+            "default_paid_by_member_id": item.default_paid_by_member_id,
+            "frequency": item.frequency,
+            "active": bool(item.active),
+            "notes": item.notes,
+        }
+        for item in templates
+    ]
+
+
+def _read_credit_balances(session: Session, household_id: int) -> list[dict]:
+    credits = session.exec(
+        select(CreditBalance)
+        .where(CreditBalance.household_id == household_id, CreditBalance.status == CreditBalanceStatus.available, CreditBalance.remaining_amount > 0)
+        .order_by(CreditBalance.created_at.desc(), CreditBalance.id.desc())
+    ).all()
+    return [
+        {
+            "id": item.id,
+            "owner_member_id": item.owner_member_id,
+            "counterparty_member_id": item.counterparty_member_id,
+            "original_amount": round(float(item.original_amount or 0), 2),
+            "remaining_amount": round(float(item.remaining_amount or 0), 2),
+            "reason": item.reason,
+            "created_at": item.created_at.isoformat() if item.created_at else None,
+        }
+        for item in credits
+    ]
+
+
+def _read_advance_payments(session: Session, household_id: int, month: str) -> list[dict]:
+    rows = session.exec(
+        select(MonthlyAdvancePayment)
+        .where(MonthlyAdvancePayment.household_id == household_id, MonthlyAdvancePayment.month == month)
+        .order_by(MonthlyAdvancePayment.created_at.desc(), MonthlyAdvancePayment.id.desc())
+    ).all()
+    return [
+        {
+            "id": item.id,
+            "month": item.month,
+            "paid_by_member_id": item.paid_by_member_id,
+            "received_by_member_id": item.received_by_member_id,
+            "amount": round(float(item.amount or 0), 2),
+            "applied_amount": round(float(item.applied_amount or 0), 2),
+            "credit_amount": round(float(item.credit_amount or 0), 2),
+            "status": item.status,
+            "date": item.date.isoformat() if item.date else None,
+            "note": item.note,
+        }
+        for item in rows
+    ]
+
+
+def _read_recent_closes(session: Session, household_id: int, limit: int = 3) -> list[dict]:
+    closes = session.exec(
+        select(MonthlyClose)
+        .where(MonthlyClose.household_id == household_id)
+        .order_by(MonthlyClose.created_at.desc(), MonthlyClose.id.desc())
+    ).all()
+    return [
+        {
+            "id": item.id,
+            "month": item.month,
+            "total_income": round(float(item.total_income or 0), 2),
+            "total_shared_expenses": round(float(item.total_shared_expenses or 0), 2),
+            "created_at": item.created_at.isoformat() if item.created_at else None,
+        }
+        for item in closes[:limit]
+    ]
+
+
+
 def _jsonable(value):
     """Convierte modelos Pydantic/SQLModel o dicts anidados a datos JSON seguros para IA."""
     if hasattr(value, "model_dump"):
@@ -297,31 +475,102 @@ def _jsonable(value):
 
 
 def build_household_ai_payload(session: Session, household_id: int, month: str, focus: str) -> dict:
-    summary = build_month_summary(month, household_id, session)
+    summary = _jsonable(build_month_summary(month, household_id, session))
+    previous_month = _month_shift(month, -1)
+    previous_summary: dict = {}
+    try:
+        previous_summary = _jsonable(build_month_summary(previous_month, household_id, session))
+    except Exception:
+        previous_summary = {}
+
     expenses = session.exec(select(Expense).where(Expense.household_id == household_id, Expense.month == month)).all()
-    debts = session.exec(select(Debt).where(Debt.household_id == household_id, Debt.status == DebtStatus.active)).all()
+    previous_expenses = session.exec(select(Expense).where(Expense.household_id == household_id, Expense.month == previous_month)).all()
+    debts = session.exec(
+        select(Debt).where(
+            Debt.household_id == household_id,
+            Debt.status.in_([DebtStatus.active, DebtStatus.partial]),
+        )
+    ).all()
     tasks = session.exec(select(HouseholdTask).where(HouseholdTask.household_id == household_id, HouseholdTask.status == TaskStatus.pending)).all()
     task_reads = [task_to_read(task) for task in tasks]
     members = session.exec(select(Member).where(Member.household_id == household_id)).all()
+
+    expenses_by_category = _sum_expenses_by_category(expenses)
+    previous_expenses_by_category = _sum_expenses_by_category(previous_expenses)
+    total_expenses = float(summary.get("total_shared_expenses") or 0)
+    previous_total_expenses = float(previous_summary.get("total_shared_expenses") or 0)
+    total_income = float(summary.get("total_income") or 0)
+    previous_total_income = float(previous_summary.get("total_income") or 0)
+    total_expense_delta = total_expenses - previous_total_expenses
+    income_delta = total_income - previous_total_income
+
+    credit_balances = _read_credit_balances(session, household_id)
+    advance_payments = _read_advance_payments(session, household_id, month)
+    fixed_templates = _read_fixed_templates(session, household_id)
+    recent_closes = _read_recent_closes(session, household_id)
+
     return {
         "month": month,
+        "previous_month": previous_month,
         "focus": focus,
         "currency": "ARS",
         "country_context": "Argentina",
-        "summary": _jsonable(summary),
-        "expenses_by_category": _sum_expenses_by_category(expenses),
+        "summary": summary,
+        "previous_summary": previous_summary,
+        "month_comparison": {
+            "current_total_income": round(total_income, 2),
+            "previous_total_income": round(previous_total_income, 2),
+            "income_delta": round(income_delta, 2),
+            "current_total_shared_expenses": round(total_expenses, 2),
+            "previous_total_shared_expenses": round(previous_total_expenses, 2),
+            "expense_delta": round(total_expense_delta, 2),
+            "expense_variation_pct": round((total_expense_delta / previous_total_expenses * 100), 2) if previous_total_expenses else None,
+            "settlements": _settlement_metrics(summary),
+        },
+        "expenses_by_category": expenses_by_category,
+        "previous_expenses_by_category": previous_expenses_by_category,
+        "category_variations": _category_variations(expenses_by_category, previous_expenses_by_category),
+        "expense_anomalies": _expense_anomalies(expenses, previous_expenses),
         "active_debts": [_jsonable(debt_to_read(session, debt)) for debt in debts],
+        "credit_balances": credit_balances,
+        "monthly_advance_payments": advance_payments,
+        "fixed_expense_templates": fixed_templates,
+        "fixed_expense_summary": {
+            "active_count": len([item for item in fixed_templates if item.get("active")]),
+            "active_total_expected": round(sum(float(item.get("amount") or 0) for item in fixed_templates if item.get("active")), 2),
+            "inactive_count": len([item for item in fixed_templates if not item.get("active")]),
+        },
+        "recent_monthly_closes": recent_closes,
         "task_summary": {
             "pending_count": len(task_reads),
             "overdue_count": len([task for task in task_reads if task.is_overdue]),
             "due_soon_count": len([task for task in task_reads if task.is_due_soon]),
             "high_priority_count": len([task for task in task_reads if task.alert_level in {"high", "overdue"}]),
+            "projects_or_purchases": len([task for task in tasks if getattr(task, "source_type", "manual") in {"purchase", "project", "savings"}]),
         },
+        "pending_tasks_sample": [
+            {
+                "id": task.id,
+                "title": task.title,
+                "priority": task.priority,
+                "source_type": task.source_type,
+                "budget_amount": round(float(task.budget_amount or 0), 2),
+                "due_date": task.due_date.isoformat() if task.due_date else None,
+            }
+            for task in tasks[:8]
+        ],
         "members": [
             {"id": member.id, "name": member.name, "role": member.role, "is_active": member.is_active}
             for member in members
         ],
+        "analysis_guidance": [
+            "Separar datos observados de inferencias.",
+            "Indicar si falta histórico suficiente para comparar.",
+            "No mezclar saldo provisorio con saldos a favor ya confirmados.",
+            "No recomendar inversiones ni endeudamiento; solo organización doméstica prudente.",
+        ],
     }
+
 
 
 def build_weekly_household_payload(session: Session, household_id: int, month: str, period: dict) -> dict:
@@ -352,6 +601,7 @@ def build_weekly_household_payload(session: Session, household_id: int, month: s
                 "next_start": period["next_start"].isoformat(),
             },
             "weekly_expenses_total": round(sum(float(item.amount or 0) for item in current_expenses), 2),
+            "previous_weekly_expenses_total": round(sum(float(item.amount or 0) for item in previous_expenses), 2),
             "weekly_expenses_by_category": _sum_expenses_by_category(current_expenses),
             "previous_expenses_by_category": _sum_expenses_by_category(previous_expenses),
         }

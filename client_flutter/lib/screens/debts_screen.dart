@@ -217,6 +217,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => Padding(
           padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
@@ -275,6 +277,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => Padding(
         padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
         child: Column(
@@ -371,6 +375,7 @@ class _DebtsScreenState extends State<DebtsScreen> {
     final reasonController = TextEditingController();
     final confirmed = await showDialog<bool>(
       context: context,
+      barrierDismissible: false,
       builder: (_) => AlertDialog(
         title: const Text('Rechazar abono'),
         content: TextField(controller: reasonController, decoration: const InputDecoration(labelText: 'Motivo opcional')),
@@ -414,6 +419,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => Padding(
           padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),

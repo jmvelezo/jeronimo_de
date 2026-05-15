@@ -241,6 +241,31 @@ class MonthSummary {
       );
 }
 
+
+class IncomeItem {
+  final int id;
+  final int memberId;
+  final String month;
+  final double amount;
+  final String? note;
+
+  IncomeItem({
+    required this.id,
+    required this.memberId,
+    required this.month,
+    required this.amount,
+    this.note,
+  });
+
+  factory IncomeItem.fromJson(Map<String, dynamic> json) => IncomeItem(
+        id: json['id'],
+        memberId: json['member_id'],
+        month: json['month'],
+        amount: (json['amount'] as num).toDouble(),
+        note: json['note'],
+      );
+}
+
 class ExpenseItem {
   final int id;
   final int paidByMemberId;
@@ -273,6 +298,89 @@ class ExpenseItem {
         isShared: json['is_shared'],
       );
 }
+
+
+class CardImportPreviewItem {
+  final String? date;
+  final String description;
+  final double amount;
+  final String currency;
+  final String category;
+  final double confidence;
+  final String rawText;
+
+  CardImportPreviewItem({
+    required this.date,
+    required this.description,
+    required this.amount,
+    required this.currency,
+    required this.category,
+    required this.confidence,
+    required this.rawText,
+  });
+
+  factory CardImportPreviewItem.fromJson(Map<String, dynamic> json) => CardImportPreviewItem(
+        date: json['date'],
+        description: json['description'] ?? '',
+        amount: (json['amount'] as num).toDouble(),
+        currency: json['currency'] ?? 'ARS',
+        category: json['category'] ?? 'General',
+        confidence: (json['confidence'] as num?)?.toDouble() ?? 0.5,
+        rawText: json['raw_text'] ?? '',
+      );
+}
+
+class CardImportPreviewResult {
+  final List<CardImportPreviewItem> items;
+  final List<String> warnings;
+
+  CardImportPreviewResult({required this.items, required this.warnings});
+
+  factory CardImportPreviewResult.fromJson(Map<String, dynamic> json) => CardImportPreviewResult(
+        items: ((json['items'] ?? []) as List).map((item) => CardImportPreviewItem.fromJson(item)).toList(),
+        warnings: ((json['warnings'] ?? []) as List).map((item) => item.toString()).toList(),
+      );
+}
+
+class FixedExpenseTemplateItem {
+  final int id;
+  final String name;
+  final double amount;
+  final String category;
+  final int? defaultPaidByMemberId;
+  final String frequency;
+  final bool active;
+  final String notes;
+  final String createdAt;
+  final String updatedAt;
+
+  FixedExpenseTemplateItem({
+    required this.id,
+    required this.name,
+    required this.amount,
+    required this.category,
+    required this.defaultPaidByMemberId,
+    required this.frequency,
+    required this.active,
+    required this.notes,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  factory FixedExpenseTemplateItem.fromJson(Map<String, dynamic> json) => FixedExpenseTemplateItem(
+        id: json['id'],
+        name: json['name'] ?? '',
+        amount: (json['amount'] as num).toDouble(),
+        category: json['category'] ?? 'General',
+        defaultPaidByMemberId: json['default_paid_by_member_id'],
+        frequency: json['frequency'] ?? 'monthly',
+        active: json['active'] == true,
+        notes: json['notes'] ?? '',
+        createdAt: json['created_at'] ?? '',
+        updatedAt: json['updated_at'] ?? '',
+      );
+}
+
 
 class DebtItem {
   final int id;
@@ -455,6 +563,8 @@ class HouseholdPeriodSettingsItem {
   final String periodStart;
   final String periodEnd;
   final String label;
+  final String? activeMonthOverride;
+  final bool isManual;
 
   HouseholdPeriodSettingsItem({
     required this.periodMode,
@@ -463,6 +573,8 @@ class HouseholdPeriodSettingsItem {
     required this.periodStart,
     required this.periodEnd,
     required this.label,
+    this.activeMonthOverride,
+    this.isManual = false,
   });
 
   bool get isCustom => periodMode == 'custom';
@@ -474,6 +586,8 @@ class HouseholdPeriodSettingsItem {
         periodStart: json['period_start'] ?? '',
         periodEnd: json['period_end'] ?? '',
         label: json['label'] ?? '',
+        activeMonthOverride: json['active_month_override'],
+        isManual: json['is_manual'] ?? false,
       );
 }
 
