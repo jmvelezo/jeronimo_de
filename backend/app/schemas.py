@@ -291,6 +291,13 @@ class HouseholdPeriodSettingsUpdate(BaseModel):
     start_day: int | None = Field(default=None, ge=1, le=28)
 
 
+class ActivePeriodResetRead(BaseModel):
+    month: str
+    deleted_incomes: int = 0
+    deleted_expenses: int = 0
+    message: str = ""
+
+
 class AutomaticDebtCreate(BaseModel):
     month: str = Field(pattern=r"^\d{4}-\d{2}$")
 

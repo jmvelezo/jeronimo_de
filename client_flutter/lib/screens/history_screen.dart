@@ -110,6 +110,47 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
+
+  Future<void> _resetActivePeriodBasic() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => AlertDialog(
+        title: Text('Reiniciar ${widget.currentMonth}'),
+        content: Text(
+          'Esto deja en cero ingresos y gastos comunes de ${widget.currentMonth}. '
+          'No toca meses cerrados, deudas, abonos, saldos a favor, pagos anticipados ni plantillas.\n\n'
+          'Usalo solo si este período quedó contaminado con datos del mes anterior o de pruebas.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.cleaning_services_outlined),
+            label: const Text('Reiniciar período'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      final result = await widget.api.resetActivePeriodBasic();
+      await _load();
+      await widget.onChanged();
+      if (mounted) {
+        final month = result['month'] ?? widget.currentMonth;
+        final deletedIncomes = result['deleted_incomes'] ?? 0;
+        final deletedExpenses = result['deleted_expenses'] ?? 0;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$month reiniciado: $deletedIncomes ingresos y $deletedExpenses gastos eliminados.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+    }
+  }
+
   Future<void> _reopenMonth(String month) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -161,7 +202,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     label: const Text('Cerrar mes activo'),
                   ),
                   const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: _resetActivePeriodBasic,
+                    icon: const Icon(Icons.cleaning_services_outlined),
+                    label: const Text('Reiniciar período activo'),
+                  ),
+                  const SizedBox(height: 8),
                   const Text('El cierre protege el mes contra cambios accidentales. Si pasás al siguiente período, ingresos y gastos arrancan vacíos sin borrar el historial.'),
+                  const SizedBox(height: 6),
+                  const Text('Reiniciar período activo solo vacía ingresos y gastos del período actual no cerrado. No toca deudas, abonos ni saldos a favor.'),
                 ],
               ),
             ),

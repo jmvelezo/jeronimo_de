@@ -24,6 +24,7 @@ from ..models import (
     PaymentStatus,
 )
 from ..schemas import (
+    ActivePeriodResetRead,
     AutomaticDebtCreate,
     CardImportPreviewItem,
     CardImportPreviewResponse,
@@ -1204,6 +1205,51 @@ def update_period_settings(
 @router.get("/active-period", response_model=HouseholdPeriodSettingsRead)
 def read_active_period(current_member: Member = Depends(get_current_member), session: Session = Depends(get_session)):
     return period_settings_to_read(session, current_member.household_id)
+
+
+@router.post("/active-period/reset-basic", response_model=ActivePeriodResetRead)
+def reset_active_period_basic(
+    current_member: Member = Depends(get_current_member),
+    session: Session = Depends(get_session),
+):
+    """Vacía solo ingresos y gastos del período activo no cerrado.
+
+    No toca cierres, deudas, abonos, saldos a favor, pagos anticipados ni plantillas.
+    Se usa para limpiar un período operativo contaminado por datos previos/pruebas.
+    """
+    ensure_operator(current_member)
+    settings = get_period_settings(session, current_member.household_id)
+    active_month, _, _, _ = _active_period(settings)
+    if get_month_close(session, current_member.household_id, active_month):
+        raise HTTPException(status_code=409, detail="No se puede reiniciar un período que ya está cerrado. Reabrilo si necesitás corregirlo.")
+
+    incomes = session.exec(
+        select(MonthlyIncome).where(
+            MonthlyIncome.household_id == current_member.household_id,
+            MonthlyIncome.month == active_month,
+        )
+    ).all()
+    expenses = session.exec(
+        select(Expense).where(
+            Expense.household_id == current_member.household_id,
+            Expense.month == active_month,
+        )
+    ).all()
+
+    deleted_incomes = len(incomes)
+    deleted_expenses = len(expenses)
+    for row in incomes:
+        session.delete(row)
+    for row in expenses:
+        session.delete(row)
+    session.commit()
+
+    return ActivePeriodResetRead(
+        month=active_month,
+        deleted_incomes=deleted_incomes,
+        deleted_expenses=deleted_expenses,
+        message=f"Se reinició {active_month}: ingresos y gastos quedaron en cero.",
+    )
 
 
 @router.get("/monthly-advance-payments", response_model=list[MonthlyAdvancePaymentRead])

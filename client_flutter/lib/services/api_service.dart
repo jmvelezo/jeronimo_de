@@ -495,6 +495,13 @@ class ApiService {
     return HouseholdPeriodSettingsItem.fromJson(jsonDecode(response.body));
   }
 
+
+  Future<Map<String, dynamic>> resetActivePeriodBasic() async {
+    final response = await http.post(_uri('/finance/active-period/reset-basic'), headers: _headers);
+    if (response.statusCode != 200) throw Exception(_extractError(response));
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
   Future<List<MonthlyAdvancePaymentItem>> getMonthlyAdvancePayments(String month) async {
     final response = await http.get(_uri('/finance/monthly-advance-payments', {'month': month}), headers: _headers);
     if (response.statusCode != 200) throw Exception(_extractError(response));
