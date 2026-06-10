@@ -1,0 +1,1 @@
+railway.cmd ssh --project=0c335afa-4c44-4a33-97d8-72425bbb12d7 --environment=99d69168-4ebe-4e4a-b4ce-7b527da3129d --service=28258e0e-95e0-4060-906f-624ddd0b0034
