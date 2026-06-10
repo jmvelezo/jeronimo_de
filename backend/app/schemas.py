@@ -117,6 +117,8 @@ class CardImportPreviewItem(BaseModel):
     currency: str = "ARS"
     category: str = "General"
     confidence: float = Field(default=0.5, ge=0, le=1)
+    installments: str | None = None
+    observation: str | None = None
     raw_text: str = ""
 
 
@@ -325,6 +327,18 @@ class MonthlyCloseRead(BaseModel):
     summary: MonthSummary
     closed_by_member_id: int
     created_at: datetime
+
+
+class MonthPeriodStatusRead(BaseModel):
+    month: str
+    status: str
+    total_income: float = 0
+    total_shared_expenses: float = 0
+    income_count: int = 0
+    expense_count: int = 0
+    advance_payment_count: int = 0
+    is_active: bool = False
+    is_closed: bool = False
 
 
 class AppCapabilities(BaseModel):

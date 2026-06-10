@@ -307,6 +307,8 @@ class CardImportPreviewItem {
   final String currency;
   final String category;
   final double confidence;
+  final String? installments;
+  final String? observation;
   final String rawText;
 
   CardImportPreviewItem({
@@ -316,6 +318,8 @@ class CardImportPreviewItem {
     required this.currency,
     required this.category,
     required this.confidence,
+    required this.installments,
+    required this.observation,
     required this.rawText,
   });
 
@@ -326,6 +330,8 @@ class CardImportPreviewItem {
         currency: json['currency'] ?? 'ARS',
         category: json['category'] ?? 'General',
         confidence: (json['confidence'] as num?)?.toDouble() ?? 0.5,
+        installments: json['installments']?.toString(),
+        observation: json['observation']?.toString(),
         rawText: json['raw_text'] ?? '',
       );
 }
@@ -624,6 +630,43 @@ class MonthlyCloseItem {
         createdAt: json['created_at'],
       );
 }
+
+class MonthPeriodStatusItem {
+  final String month;
+  final String status;
+  final double totalIncome;
+  final double totalSharedExpenses;
+  final int incomeCount;
+  final int expenseCount;
+  final int advancePaymentCount;
+  final bool isActive;
+  final bool isClosed;
+
+  MonthPeriodStatusItem({
+    required this.month,
+    required this.status,
+    required this.totalIncome,
+    required this.totalSharedExpenses,
+    required this.incomeCount,
+    required this.expenseCount,
+    required this.advancePaymentCount,
+    required this.isActive,
+    required this.isClosed,
+  });
+
+  factory MonthPeriodStatusItem.fromJson(Map<String, dynamic> json) => MonthPeriodStatusItem(
+        month: json['month'] ?? '',
+        status: json['status'] ?? 'open_with_data',
+        totalIncome: ((json['total_income'] ?? 0) as num).toDouble(),
+        totalSharedExpenses: ((json['total_shared_expenses'] ?? 0) as num).toDouble(),
+        incomeCount: json['income_count'] ?? 0,
+        expenseCount: json['expense_count'] ?? 0,
+        advancePaymentCount: json['advance_payment_count'] ?? 0,
+        isActive: json['is_active'] ?? false,
+        isClosed: json['is_closed'] ?? false,
+      );
+}
+
 
 class HouseholdTaskItem {
   final int id;

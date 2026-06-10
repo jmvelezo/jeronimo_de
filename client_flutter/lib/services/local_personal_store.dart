@@ -147,6 +147,35 @@ class LocalPersonalStore {
     return item;
   }
 
+  Future<PersonalIncome> upsertMonthlyMainIncome({required String accountId, required String month, required double amount, String source = 'Ingreso del mes', String note = ''}) async {
+    final snapshot = await loadSnapshot(month: month);
+    PersonalIncome? existing;
+    for (final item in snapshot.incomes) {
+      final sourceLabel = item.source.trim().toLowerCase();
+      final noteLabel = item.note.trim().toLowerCase();
+      final isMainIncome = sourceLabel == 'ingreso del mes' ||
+          sourceLabel == 'salario' ||
+          sourceLabel == 'sueldo' ||
+          noteLabel.contains('sincronizable con hogar') ||
+          noteLabel.contains('usado para el cálculo del hogar');
+      if (item.month == month && isMainIncome) existing = item;
+    }
+    final item = PersonalIncome(
+      id: existing?.id ?? _id(),
+      accountId: accountId,
+      amount: amount,
+      source: source.trim().isEmpty ? 'Ingreso del mes' : source.trim(),
+      note: note.trim().isEmpty ? 'Ingreso mensual sincronizable con hogar.' : note.trim(),
+      date: '$month-01',
+      month: month,
+    );
+    final updated = existing == null
+        ? [...snapshot.incomes, item]
+        : snapshot.incomes.map((income) => income.id == existing!.id ? item : income).toList();
+    await _saveIncomes(updated);
+    return item;
+  }
+
   Future<void> deleteIncome(String id) async {
     final snapshot = await loadSnapshot();
     await _saveIncomes(snapshot.incomes.where((item) => item.id != id).toList());

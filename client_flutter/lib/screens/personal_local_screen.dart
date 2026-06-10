@@ -10,8 +10,9 @@ import '../widgets/app_shell.dart';
 
 class PersonalLocalScreen extends StatefulWidget {
   final bool allowSharedNavigation;
+  final ValueChanged<int>? onSharedNavigationRequested;
 
-  const PersonalLocalScreen({super.key, this.allowSharedNavigation = false});
+  const PersonalLocalScreen({super.key, this.allowSharedNavigation = false, this.onSharedNavigationRequested});
 
   @override
   State<PersonalLocalScreen> createState() => _PersonalLocalScreenState();
@@ -61,6 +62,7 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
   bool householdImpactLoading = false;
   bool householdImpactAvailable = false;
   bool showHouseholdImpact = true;
+  bool showAdvancedPersonal = false;
   String? error;
   String? householdImpactError;
   PersonalLocalSnapshot? snapshot;
@@ -78,7 +80,17 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
       error = null;
     });
     try {
-      final loaded = await store.loadSnapshot();
+      String? sharedActiveMonth;
+      try {
+        final api = await ApiService.load();
+        if (api.token != null && api.token!.trim().isNotEmpty) {
+          final activePeriod = await api.getActivePeriod();
+          if (activePeriod.activeMonth.trim().isNotEmpty) sharedActiveMonth = activePeriod.activeMonth.trim();
+        }
+      } catch (_) {
+        sharedActiveMonth = null;
+      }
+      final loaded = await store.loadSnapshot(month: sharedActiveMonth);
       if (mounted) setState(() => snapshot = loaded);
       await _loadHouseholdImpact(loaded);
     } catch (e) {
@@ -198,7 +210,7 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
                       AppHeroHeader(
                         eyebrow: 'Modo personal local',
                         title: data?.profile.isConfigured == true ? data!.profile.name : 'Mis cuentas',
-                        subtitle: 'Tu espacio privado: cuentas, ingresos, gastos, presupuestos y deudas.',
+                        subtitle: 'Tu espacio privado: ingreso del mes, gastos, cuentas y deudas. Casa queda a un toque.',
                         icon: Icons.lock_person_rounded,
                         assetIconPath: kBrandNavPersonal,
                         trailing: IconButton(onPressed: _load, icon: const Icon(Icons.refresh, color: Colors.white)),
@@ -209,25 +221,31 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
                       if (data != null) ...[
                         if (!data.profile.isConfigured) _setupProfileCard() else _profileHeader(data),
                         const SizedBox(height: 12),
+                        _monthlyIncomeBridgeCard(data),
+                        const SizedBox(height: 12),
                         _summaryCard(data),
                         const SizedBox(height: 12),
                         _householdImpactCard(data),
                         if (householdImpactAvailable || householdImpactLoading || householdImpactError != null) const SizedBox(height: 12),
-                        _personalAiCard(data),
-                        const SizedBox(height: 12),
                         _quickActionsCard(data),
                         const SizedBox(height: 12),
                         _accountsCard(data),
                         const SizedBox(height: 12),
-                        _budgetsCard(data),
-                        const SizedBox(height: 12),
-                        _categoriesCard(data),
-                        const SizedBox(height: 12),
                         _movementsCard(data),
                         const SizedBox(height: 12),
-                        _tasksCard(data),
-                        const SizedBox(height: 12),
                         _debtsCard(data),
+                        const SizedBox(height: 12),
+                        _advancedPersonalToggleCard(data),
+                        if (showAdvancedPersonal) ...[
+                          const SizedBox(height: 12),
+                          _personalAiCard(data),
+                          const SizedBox(height: 12),
+                          _budgetsCard(data),
+                          const SizedBox(height: 12),
+                          _categoriesCard(data),
+                          const SizedBox(height: 12),
+                          _tasksCard(data),
+                        ],
                       ],
                     ],
                   ),
@@ -247,7 +265,146 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
 
   void _handleBottomNav(int index) {
     if (index == kBottomNavPersonalIndex) return;
-    if (Navigator.of(context).canPop()) Navigator.of(context).pop(index);
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop(index);
+      return;
+    }
+    final callback = widget.onSharedNavigationRequested;
+    if (callback != null) {
+      callback(index);
+      return;
+    }
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(content: Text('Entrá a un hogar compartido para usar Inicio, Casa, Tareas y Más.')),
+    );
+  }
+
+  PersonalIncome? _mainMonthlyIncome(PersonalLocalSnapshot data) {
+    final candidates = data.incomes.where((item) => item.month == data.month && _isMainMonthlyIncome(item)).toList();
+    if (candidates.isEmpty) return null;
+    candidates.sort((a, b) => b.date.compareTo(a.date));
+    return candidates.first;
+  }
+
+  bool _isMainMonthlyIncome(PersonalIncome item) {
+    final source = item.source.trim().toLowerCase();
+    final note = item.note.trim().toLowerCase();
+    return source == 'ingreso del mes' ||
+        source == 'salario' ||
+        source == 'sueldo' ||
+        note.contains('sincronizable con hogar') ||
+        note.contains('usado para el cálculo del hogar');
+  }
+
+  Widget _monthlyIncomeBridgeCard(PersonalLocalSnapshot data) {
+    final mainIncome = _mainMonthlyIncome(data);
+    final hasAccounts = data.activeAccounts.isNotEmpty;
+    final syncedIncome = householdImpact?.householdIncome;
+    return AppCard(
+      border: Border.all(color: kPrimary.withOpacity(0.16)),
+      gradient: const LinearGradient(colors: [Color(0xFFFFFFFF), Color(0xFFF5F3FF)]),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SectionTitle(
+            title: 'Ingreso del mes',
+            subtitle: 'Salario o ingreso variable de ${data.month}. Se guarda en Personal y puede alimentar Casa.',
+            icon: Icons.payments_outlined,
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              _miniMetric('Personal', mainIncome == null ? 'Sin cargar' : money.format(mainIncome.amount), Icons.lock_person_outlined, kPrimary),
+              _miniMetric('Casa', syncedIncome == null || !householdImpactAvailable ? 'No conectado' : money.format(syncedIncome), Icons.roofing_outlined, Colors.indigo),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            hasAccounts
+                ? 'Cada persona carga su ingreso desde Personal. Si hay hogar conectado, se actualiza el ingreso del integrante actual para el reparto proporcional.'
+                : 'Primero agregá una cuenta personal para poder registrar tu ingreso del mes.',
+            style: const TextStyle(color: kMuted, height: 1.3, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              ElevatedButton.icon(
+                onPressed: hasAccounts ? () => _showMonthlyIncomeSheet(data) : _showAccountSheet,
+                icon: Icon(hasAccounts ? Icons.edit_outlined : Icons.account_balance_wallet_outlined),
+                label: Text(hasAccounts ? 'Cargar / editar ingreso' : 'Agregar cuenta'),
+              ),
+              if (widget.allowSharedNavigation)
+                OutlinedButton.icon(
+                  onPressed: () => _handleBottomNav(kBottomNavCasaIndex),
+                  icon: const Icon(Icons.roofing_outlined),
+                  label: const Text('Ir a Casa'),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _miniMetric(String label, String value, IconData icon, Color color) {
+    return Container(
+      constraints: const BoxConstraints(minWidth: 180),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: color.withOpacity(0.14)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, fontSize: 12)),
+              Text(value, style: TextStyle(color: color, fontWeight: FontWeight.w900)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _advancedPersonalToggleCard(PersonalLocalSnapshot data) {
+    return AppCard(
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(color: kLavender, borderRadius: BorderRadius.circular(16)),
+            child: const Icon(Icons.tune_outlined, color: kPrimary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text('Herramientas personales avanzadas', style: TextStyle(fontWeight: FontWeight.w900, color: kInk)),
+                SizedBox(height: 3),
+                Text('Presupuestos, categorías, tareas e IA quedan disponibles, pero fuera del flujo principal.', style: TextStyle(color: kMuted, fontSize: 12, height: 1.25, fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+          TextButton.icon(
+            onPressed: () => setState(() => showAdvancedPersonal = !showAdvancedPersonal),
+            icon: Icon(showAdvancedPersonal ? Icons.expand_less : Icons.expand_more),
+            label: Text(showAdvancedPersonal ? 'Ocultar' : 'Mostrar'),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _profileHeader(PersonalLocalSnapshot data) {
@@ -265,7 +422,7 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(data.profile.name, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
-                Text('Mes privado · ${data.month}', style: const TextStyle(color: Colors.black54)),
+                Text('Mes operativo · ${data.month}', style: const TextStyle(color: Colors.black54)),
                 if (data.profile.hasApiKey)
                   Text('IA personal preparada: ${data.profile.aiProviderLabel}', style: const TextStyle(color: Colors.green, fontWeight: FontWeight.w700)),
               ],
@@ -478,20 +635,17 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
     final hasAccounts = data.activeAccounts.isNotEmpty;
     final actions = <_PersonalQuickAction>[
       _PersonalQuickAction(Icons.account_balance_wallet_outlined, 'Cuenta', _showAccountSheet),
-      _PersonalQuickAction(Icons.payments_outlined, 'Ingreso', hasAccounts ? _showIncomeSheet : null),
+      _PersonalQuickAction(Icons.payments_outlined, 'Ingreso del mes', hasAccounts ? () => _showMonthlyIncomeSheet(data) : null),
       _PersonalQuickAction(Icons.shopping_bag_outlined, 'Gasto', hasAccounts ? _showExpenseSheet : null),
-      _PersonalQuickAction(Icons.pie_chart_outline, 'Presupuesto', data.activeExpenseCategories.isNotEmpty ? _showBudgetSheet : null),
-      _PersonalQuickAction(Icons.category_outlined, 'Categoría', _showCategorySheet),
       _PersonalQuickAction(Icons.receipt_long_outlined, 'Deuda', _showDebtSheet),
-      _PersonalQuickAction(Icons.task_alt_outlined, 'Tarea', _showTaskSheet),
-      _PersonalQuickAction(Icons.auto_awesome_outlined, 'IA', () => _generatePersonalAi(data)),
+      if (widget.allowSharedNavigation) _PersonalQuickAction(Icons.roofing_outlined, 'Casa', () => _handleBottomNav(kBottomNavCasaIndex)),
     ];
 
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SectionTitle(title: 'Acciones rápidas', subtitle: 'Lo cotidiano, sin menús raros.', icon: Icons.add_circle_outline),
+          const SectionTitle(title: 'Acciones rápidas', subtitle: 'Lo principal queda a mano; lo avanzado va abajo.', icon: Icons.add_circle_outline),
           GridView.builder(
             itemCount: actions.length,
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -1112,6 +1266,94 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
     );
   }
 
+  Future<void> _showMonthlyIncomeSheet(PersonalLocalSnapshot data) async {
+    if (data.activeAccounts.isEmpty) {
+      await _showAccountSheet();
+      return;
+    }
+    final existing = _mainMonthlyIncome(data);
+    PersonalAccount selected = data.activeAccounts.firstWhere(
+      (item) => item.id == existing?.accountId,
+      orElse: () => data.activeAccounts.first,
+    );
+    final amountController = TextEditingController(text: existing == null ? '' : _formatMoneyInput(existing.amount));
+    final noteController = TextEditingController(text: existing?.note ?? 'Ingreso mensual sincronizable con hogar.');
+    var syncWithHousehold = householdImpactAvailable;
+    String sheetMessage = householdImpactAvailable
+        ? 'Al guardar, también se actualizará tu ingreso de Casa para el reparto proporcional de ${data.month}.'
+        : 'Se guardará en Personal. Conectá un hogar para usarlo en gastos comunes.';
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: true,
+      enableDrag: true,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setModalState) => Padding(
+          padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Ingreso del mes · ${data.month}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Text(sheetMessage, style: const TextStyle(color: kMuted, height: 1.3, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 14),
+              DropdownButtonFormField<PersonalAccount>(
+                value: selected,
+                items: data.activeAccounts.map((item) => DropdownMenuItem(value: item, child: Text(item.name))).toList(),
+                onChanged: (value) => setModalState(() => selected = value ?? selected),
+                decoration: const InputDecoration(labelText: 'Cuenta donde entra el ingreso'),
+              ),
+              const SizedBox(height: 10),
+              TextField(controller: amountController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Monto del ingreso mensual')),
+              const SizedBox(height: 10),
+              TextField(controller: noteController, decoration: const InputDecoration(labelText: 'Nota opcional')),
+              const SizedBox(height: 10),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: syncWithHousehold,
+                onChanged: householdImpactAvailable ? (value) => setModalState(() => syncWithHousehold = value) : null,
+                title: const Text('Usar también para el cálculo del hogar', style: TextStyle(fontWeight: FontWeight.w800)),
+                subtitle: Text(householdImpactAvailable ? 'Actualiza tu ingreso como integrante de Casa.' : 'Disponible cuando haya una sesión de hogar conectada.'),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () async {
+                  final amount = _parseMoney(amountController.text);
+                  await store.upsertMonthlyMainIncome(
+                    accountId: selected.id,
+                    month: data.month,
+                    amount: amount,
+                    source: 'Ingreso del mes',
+                    note: noteController.text,
+                  );
+                  var message = 'Ingreso guardado en Personal. Conectá un hogar para usarlo en gastos comunes.';
+                  if (syncWithHousehold) {
+                    try {
+                      final api = await ApiService.load();
+                      final currentMember = await api.getMe();
+                      final activePeriod = await api.getActivePeriod();
+                      final targetMonth = activePeriod.activeMonth.trim().isEmpty ? data.month : activePeriod.activeMonth.trim();
+                      await api.saveIncome(memberId: currentMember.id, month: targetMonth, amount: amount);
+                      message = 'Ingreso guardado y usado para el cálculo del hogar.';
+                    } catch (_) {
+                      message = 'Ingreso guardado en Personal, pero no se pudo sincronizar con Casa ahora.';
+                    }
+                  }
+                  if (mounted) Navigator.pop(context);
+                  await _load();
+                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+                },
+                child: const Text('Guardar ingreso del mes'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _showIncomeSheet() async {
     final data = snapshot!;
     PersonalAccount selected = data.activeAccounts.first;
@@ -1442,6 +1684,11 @@ class _PersonalLocalScreenState extends State<PersonalLocalScreen> {
       default:
         return 'normal';
     }
+  }
+
+  String _formatMoneyInput(double value) {
+    if (value == value.roundToDouble()) return value.round().toString();
+    return value.toStringAsFixed(2).replaceAll('.', ',');
   }
 
   double _parseMoney(String raw) {

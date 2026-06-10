@@ -53,6 +53,7 @@ from ..schemas import (
     HouseholdPeriodSettingsRead,
     HouseholdPeriodSettingsUpdate,
     MonthlyCloseRead,
+    MonthPeriodStatusRead,
 )
 from ..services.calculations import calculate_month_summary, round_money
 from .auth import get_current_member
@@ -133,9 +134,14 @@ def _extract_pdf_text(file_bytes: bytes) -> tuple[str, list[str]]:
     try:
         reader = PdfReader(BytesIO(file_bytes))
         texts: list[str] = []
+        page_count = len(reader.pages)
         for page in reader.pages[:12]:
             texts.append(page.extract_text() or '')
         text = '\n'.join(texts).strip()
+        if page_count > 12:
+            warnings.append('El PDF tiene más de 12 páginas. Se leyó la primera parte para mantener la vista previa liviana.')
+        if page_count:
+            warnings.append(f'Se leyó texto de {min(page_count, 12)} página{'' if min(page_count, 12) == 1 else 's'} del PDF.')
     except Exception as exc:
         raise HTTPException(status_code=400, detail='No se pudo leer el PDF. Probá con un resumen digital, no escaneado.') from exc
     if not text:
@@ -143,64 +149,182 @@ def _extract_pdf_text(file_bytes: bytes) -> tuple[str, list[str]]:
     return text, warnings
 
 
+def _clean_card_line(raw: str) -> str:
+    return re.sub(r'\s+', ' ', raw.replace('\xa0', ' ')).strip()
+
+
+def _line_windows(lines: list[str]) -> list[tuple[str, int]]:
+    windows: list[tuple[str, int]] = []
+    for index, line in enumerate(lines):
+        windows.append((line, index))
+        if index + 1 < len(lines):
+            windows.append((f'{line} {lines[index + 1]}', index))
+        if index + 2 < len(lines):
+            windows.append((f'{line} {lines[index + 1]} {lines[index + 2]}', index))
+    return windows
+
+
+def _looks_like_summary_line(line: str) -> bool:
+    lower = line.lower()
+    summary_words = (
+        'total', 'saldo', 'pago minimo', 'pago mínimo', 'vencimiento', 'cierre',
+        'limite', 'límite', 'resumen', 'anterior', 'financiacion', 'financiación',
+        'interes', 'interés', 'iva', 'sellado', 'tna', 'tea', 'cft', 'disponible',
+    )
+    movement_words = (
+        'compra', 'consumo', 'establecimiento', 'cuota', 'debito', 'débito',
+        'mercado', 'super', 'farmacia', 'ypf', 'shell', 'uber', 'cabify', 'rappi',
+        'pedidosya', 'transfer', 'spotify', 'netflix', 'personal pay', 'movistar',
+    )
+    if not any(word in lower for word in summary_words):
+        return False
+    if any(word in lower for word in movement_words):
+        return False
+    return True
+
+
+def _extract_installments(line: str) -> str | None:
+    patterns = [
+        r'cuotas?\s*(\d{1,2})\s*/\s*(\d{1,2})',
+        r'cuotas?\s*(\d{1,2})\s+de\s+(\d{1,2})',
+        r'\b(\d{1,2})\s*/\s*(\d{1,2})\b',
+    ]
+    lower = line.lower()
+    for pattern in patterns:
+        match = re.search(pattern, lower)
+        if match:
+            if '/' in match.group(0) and 'cuot' not in lower:
+                start = max(0, match.start() - 12)
+                end = min(len(lower), match.end() + 12)
+                if 'cuot' not in lower[start:end]:
+                    continue
+            return f'{match.group(1)}/{match.group(2)}'
+    return None
+
+
+def _description_from_card_line(line: str, date_match: re.Match[str] | None, amount_match: re.Match[str]) -> str:
+    without_amount = (line[:amount_match.start()] + ' ' + line[amount_match.end():]).strip()
+    if date_match:
+        # Recalcular sobre la cadena sin importe: alcanza para limpiar la fecha aunque el índice cambie levemente.
+        without_amount = re.sub(r'\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b', ' ', without_amount, count=1)
+    description = without_amount
+    description = re.sub(r'\b(?:ars|pesos|usd|u\$s)\b', ' ', description, flags=re.I)
+    description = re.sub(r'\b(?:cuotas?|plan)\s*\d{1,2}\s*(?:/|de)\s*\d{1,2}\b', ' ', description, flags=re.I)
+    description = re.sub(r'\b\d{3,}\b', ' ', description)
+    description = re.sub(r'\s+', ' ', description).strip(' -·|:;')
+    return description[:160] or 'Movimiento detectado'
+
+
+def _find_card_date_match(line: str, date_re: re.Pattern[str]) -> re.Match[str] | None:
+    matches = list(date_re.finditer(line))
+    if not matches:
+        return None
+    lower = line.lower()
+    for match in matches:
+        start = max(0, match.start() - 14)
+        end = min(len(lower), match.end() + 14)
+        if 'cuot' in lower[start:end]:
+            continue
+        parsed = _parse_card_date(match.group(1))
+        if parsed is not None:
+            return match
+    return None
+
+
+def _candidate_without_date(line: str, fallback_month: str | None) -> bool:
+    if not fallback_month:
+        return False
+    lower = line.lower()
+    movement_words = (
+        'compra', 'consumo', 'cuota', 'debito', 'débito', 'mercado', 'super',
+        'farmacia', 'restaurant', 'resto', 'bar ', 'cafe', 'cafÉ', 'uber', 'cabify',
+        'rappi', 'pedidosya', 'netflix', 'spotify', 'movistar', 'personal', 'telecom',
+        'edenor', 'edesur', 'aysa', 'ypf', 'shell', 'axion', 'carrefour', 'coto', 'jumbo',
+    )
+    return any(word in lower for word in movement_words)
+
+
 def _detect_card_movements(text: str, fallback_month: str | None = None) -> tuple[list[CardImportPreviewItem], list[str]]:
     warnings: list[str] = []
     items: list[CardImportPreviewItem] = []
     date_re = re.compile(r'\b(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b')
     amount_re = re.compile(r'(?<!\d)(?:\$\s*)?-?\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|-?\d+(?:,\d{2})(?!\d)')
-    ignored = ('total', 'saldo', 'pago', 'vencimiento', 'cierre', 'limite', 'límite', 'resumen', 'cuota del resumen')
+    lines = [_clean_card_line(line) for line in text.splitlines()]
+    lines = [line for line in lines if len(line) >= 4]
     seen: set[tuple[str, str, int]] = set()
+    scanned = 0
+    skipped_summary = 0
+    skipped_invalid_amount = 0
+    without_date = 0
 
-    for raw_line in text.splitlines():
-        line = re.sub(r'\s+', ' ', raw_line).strip()
+    for line, index in _line_windows(lines):
         if len(line) < 8:
             continue
-        lower = line.lower()
-        if any(word in lower for word in ignored) and not re.search(r'compra|consumo|establecimiento', lower):
+        scanned += 1
+        if _looks_like_summary_line(line):
+            skipped_summary += 1
             continue
-        date_match = date_re.search(line)
-        if not date_match:
-            continue
+        date_match = _find_card_date_match(line, date_re)
         amount_matches = list(amount_re.finditer(line))
         if not amount_matches:
             continue
-        # Usar el último importe de la línea, que suele ser el monto final de la operación.
+        if not date_match and not _candidate_without_date(line, fallback_month):
+            without_date += 1
+            continue
         amount_match = amount_matches[-1]
         amount = _parse_card_amount(amount_match.group(0))
         if amount is None:
+            skipped_invalid_amount += 1
             continue
-        parsed_date = _parse_card_date(date_match.group(1), fallback_month)
-        description = (line[:date_match.start()] + ' ' + line[date_match.end():amount_match.start()]).strip(' -·|')
-        if not description:
-            description = line[date_match.end():amount_match.start()].strip(' -·|') or 'Movimiento detectado'
-        # Limpiar números sueltos típicos de comprobantes/cuotas.
-        description = re.sub(r'\b\d{3,}\b', '', description).strip(' -·|') or 'Movimiento detectado'
-        key = (parsed_date.isoformat() if parsed_date else '', description.lower(), int(round(amount * 100)))
+        parsed_date = _parse_card_date(date_match.group(1), fallback_month) if date_match else None
+        description = _description_from_card_line(line, date_match, amount_match)
+        if _looks_like_summary_line(description):
+            skipped_summary += 1
+            continue
+        key = (parsed_date.isoformat() if parsed_date else f'{fallback_month or ''}-sin-fecha-{index}', description.lower(), int(round(amount * 100)))
         if key in seen:
             continue
         seen.add(key)
-        confidence = 0.72 if parsed_date else 0.55
-        if '$' in amount_match.group(0) or 'ars' in lower:
-            confidence += 0.08
+        installments = _extract_installments(line)
+        observation: str | None = None
+        confidence = 0.74 if parsed_date else 0.52
+        if date_match is None:
+            observation = 'Fecha no detectada: se usará el primer día del mes en la app si lo importás sin corregir.'
+        if len(amount_matches) > 1:
+            confidence -= 0.06
+            observation = observation or 'La línea tenía más de un importe; se tomó el último como monto del movimiento.'
+        if installments:
+            confidence += 0.04
+        if '$' in amount_match.group(0) or 'ars' in line.lower():
+            confidence += 0.06
         items.append(
             CardImportPreviewItem(
                 date=parsed_date,
-                description=description[:160],
+                description=description,
                 amount=round_money(amount),
                 currency='ARS',
                 category=_guess_card_category(description),
-                confidence=min(confidence, 0.92),
-                raw_text=line[:260],
+                confidence=max(0.35, min(confidence, 0.94)),
+                installments=installments,
+                observation=observation,
+                raw_text=line[:300],
             )
         )
-        if len(items) >= 120:
-            warnings.append('Se muestran los primeros 120 movimientos detectados para mantener la vista previa liviana.')
+        if len(items) >= 180:
+            warnings.append('Se muestran los primeros 180 movimientos detectados para mantener la vista previa liviana.')
             break
 
     if not items and text.strip():
         warnings.append('No se detectaron movimientos con el formato esperado. El resumen puede tener columnas no compatibles todavía.')
+    else:
+        warnings.append(f'Se detectaron {len(items)} movimiento{'' if len(items) == 1 else 's'} candidato{'' if len(items) == 1 else 's'} para revisar antes de importar.')
+        if skipped_summary:
+            warnings.append(f'Se omitieron {skipped_summary} línea{'' if skipped_summary == 1 else 's'} que parecían totales, saldos, vencimientos o datos del resumen.')
+        if without_date:
+            warnings.append('Algunas líneas con importe no se mostraron porque no tenían fecha ni señales claras de consumo.')
+        if skipped_invalid_amount:
+            warnings.append('Algunas líneas fueron omitidas porque el monto no pudo interpretarse con seguridad.')
     return items, warnings
-
 
 def _month_add(year: int, month: int, delta: int) -> tuple[int, int]:
     idx = year * 12 + (month - 1) + delta
@@ -226,15 +350,59 @@ def _active_period(settings: HouseholdPeriodSettings, today: Date | None = None)
     return active_month, start, end, False
 
 
-def get_period_settings(session: Session, household_id: int) -> HouseholdPeriodSettings:
-    settings = session.exec(select(HouseholdPeriodSettings).where(HouseholdPeriodSettings.household_id == household_id)).first()
-    if settings:
+def _months_with_open_data(session: Session, household_id: int) -> list[str]:
+    """Meses con datos operativos y sin cierre formal.
+
+    Se usa solo para inicializar una vez el período operativo manual cuando un hogar
+    venía de versiones anteriores sin active_month_override persistido.
+    """
+    months: set[str] = set()
+    for model in (MonthlyIncome, Expense, MonthlyParticipation, MonthlyAdvancePayment):
+        values = session.exec(select(model.month).where(model.household_id == household_id)).all()
+        months.update(month for month in values if month)
+
+    closed_months = set(
+        session.exec(select(MonthlyClose.month).where(MonthlyClose.household_id == household_id)).all()
+    )
+    return sorted(month for month in months if month not in closed_months)
+
+
+def _initial_active_month(session: Session, household_id: int, settings: HouseholdPeriodSettings, today: Date | None = None) -> str:
+    open_months = _months_with_open_data(session, household_id)
+    if open_months:
+        return open_months[-1]
+
+    latest_closed_month = session.exec(
+        select(MonthlyClose.month)
+        .where(MonthlyClose.household_id == household_id)
+        .order_by(MonthlyClose.month.desc())
+    ).first()
+    if latest_closed_month:
+        return _month_str_add(latest_closed_month, 1)
+
+    calendar_month, _, _ = period_for_date(today or datetime.now(timezone.utc).date(), settings)
+    return calendar_month
+
+
+def _ensure_active_month_override(session: Session, settings: HouseholdPeriodSettings) -> HouseholdPeriodSettings:
+    if settings.active_month_override:
         return settings
-    settings = HouseholdPeriodSettings(household_id=household_id, period_mode="calendar", start_day=1)
+    settings.active_month_override = _initial_active_month(session, settings.household_id, settings)
+    settings.updated_at = datetime.now(timezone.utc)
     session.add(settings)
     session.commit()
     session.refresh(settings)
     return settings
+
+
+def get_period_settings(session: Session, household_id: int) -> HouseholdPeriodSettings:
+    settings = session.exec(select(HouseholdPeriodSettings).where(HouseholdPeriodSettings.household_id == household_id)).first()
+    if not settings:
+        settings = HouseholdPeriodSettings(household_id=household_id, period_mode="calendar", start_day=1)
+        session.add(settings)
+        session.commit()
+        session.refresh(settings)
+    return _ensure_active_month_override(session, settings)
 
 
 def period_for_date(value: Date, settings: HouseholdPeriodSettings) -> tuple[str, Date, Date]:
@@ -458,7 +626,17 @@ def credit_to_read(credit: CreditBalance) -> CreditBalanceRead:
 
 
 def monthly_close_to_read(close: MonthlyClose) -> MonthlyCloseRead:
-    summary = MonthSummary.model_validate(json.loads(close.summary_json))
+    try:
+        summary = MonthSummary.model_validate(json.loads(close.summary_json or "{}"))
+    except Exception:
+        summary = MonthSummary(
+            month=close.month,
+            total_income=round_money(close.total_income),
+            total_shared_expenses=round_money(close.total_shared_expenses),
+            members=[],
+            settlements=[],
+            warning="El cierre existe, pero el detalle completo no pudo reconstruirse por formato anterior.",
+        )
     return MonthlyCloseRead(
         id=close.id or 0,
         household_id=close.household_id,
@@ -756,7 +934,7 @@ async def preview_card_import(
     items, detection_warnings = _detect_card_movements(text, month)
     warnings.extend(detection_warnings)
     if items:
-        warnings.append('Vista previa solamente: ningún movimiento fue cargado como gasto común.')
+        warnings.append('Vista previa solamente: ningún movimiento fue cargado todavía. Elegí destino en la app antes de importar.')
     return CardImportPreviewResponse(items=items, warnings=warnings)
 
 
@@ -1378,6 +1556,7 @@ def close_month(
     session: Session = Depends(get_session),
 ):
     ensure_operator(current_member)
+    settings = get_period_settings(session, current_member.household_id)
     existing = get_month_close(session, current_member.household_id, payload.month)
     if existing:
         raise HTTPException(status_code=409, detail="Este mes ya estaba cerrado. Reabrilo si necesitás corregir algo.")
@@ -1397,7 +1576,6 @@ def close_month(
     session.add(close)
 
     if payload.advance_to_next:
-        settings = get_period_settings(session, current_member.household_id)
         settings.active_month_override = _month_str_add(payload.month, 1)
         settings.updated_by_member_id = current_member.id
         settings.updated_at = datetime.now(timezone.utc)
@@ -1406,6 +1584,83 @@ def close_month(
     session.commit()
     session.refresh(close)
     return monthly_close_to_read(close)
+
+
+@router.get("/month-periods", response_model=list[MonthPeriodStatusRead])
+def list_month_period_statuses(
+    current_member: Member = Depends(get_current_member),
+    session: Session = Depends(get_session),
+):
+    settings = get_period_settings(session, current_member.household_id)
+    active_month, _, _, _ = _active_period(settings)
+    periods: dict[str, dict] = {
+        active_month: {
+            "month": active_month,
+            "status": "active",
+            "total_income": 0.0,
+            "total_shared_expenses": 0.0,
+            "income_count": 0,
+            "expense_count": 0,
+            "advance_payment_count": 0,
+            "is_active": True,
+            "is_closed": False,
+        }
+    }
+
+    def ensure_period(month: str) -> dict:
+        if month not in periods:
+            periods[month] = {
+                "month": month,
+                "status": "open_with_data",
+                "total_income": 0.0,
+                "total_shared_expenses": 0.0,
+                "income_count": 0,
+                "expense_count": 0,
+                "advance_payment_count": 0,
+                "is_active": month == active_month,
+                "is_closed": False,
+            }
+        return periods[month]
+
+    for income in session.exec(select(MonthlyIncome).where(MonthlyIncome.household_id == current_member.household_id)).all():
+        period = ensure_period(income.month)
+        period["total_income"] += income.amount
+        period["income_count"] += 1
+
+    for expense in session.exec(select(Expense).where(Expense.household_id == current_member.household_id)).all():
+        period = ensure_period(expense.month)
+        if expense.is_shared:
+            period["total_shared_expenses"] += expense.amount
+        period["expense_count"] += 1
+
+    for payment in session.exec(select(MonthlyAdvancePayment).where(MonthlyAdvancePayment.household_id == current_member.household_id)).all():
+        period = ensure_period(payment.month)
+        period["advance_payment_count"] += 1
+
+    closes = session.exec(
+        select(MonthlyClose)
+        .where(MonthlyClose.household_id == current_member.household_id)
+        .order_by(MonthlyClose.month.desc(), MonthlyClose.id.desc())
+    ).all()
+    for close in closes:
+        period = ensure_period(close.month)
+        period["status"] = "closed"
+        period["total_income"] = close.total_income
+        period["total_shared_expenses"] = close.total_shared_expenses
+        period["is_closed"] = True
+        period["is_active"] = close.month == active_month
+
+    for period in periods.values():
+        if period["is_closed"]:
+            period["status"] = "closed"
+        elif period["is_active"]:
+            period["status"] = "active"
+        else:
+            period["status"] = "open_with_data"
+        period["total_income"] = round_money(period["total_income"])
+        period["total_shared_expenses"] = round_money(period["total_shared_expenses"])
+
+    return [MonthPeriodStatusRead(**period) for period in sorted(periods.values(), key=lambda item: item["month"], reverse=True)]
 
 
 @router.get("/monthly-closes", response_model=list[MonthlyCloseRead])

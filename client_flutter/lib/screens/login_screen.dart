@@ -220,8 +220,18 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _openDashboard(SessionData session) {
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => DashboardScreen(api: api, session: session)),
+    final navigator = Navigator.of(context);
+    navigator.pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => PersonalLocalScreen(
+          allowSharedNavigation: true,
+          onSharedNavigationRequested: (index) {
+            navigator.pushReplacement(
+              MaterialPageRoute(builder: (_) => DashboardScreen(api: api, session: session, initialNavIndex: index)),
+            );
+          },
+        ),
+      ),
     );
   }
 

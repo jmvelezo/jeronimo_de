@@ -3,8 +3,10 @@ import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 import '../models/app_models.dart';
+import '../models/local_personal_models.dart';
 import '../services/api_service.dart';
 import '../services/friendly_messages.dart';
+import '../services/local_personal_store.dart';
 import '../services/shared_sync_store.dart';
 import '../widgets/app_card.dart';
 import '../widgets/app_shell.dart';
@@ -20,7 +22,9 @@ class DashboardScreen extends StatefulWidget {
   final ApiService api;
   final SessionData session;
 
-  const DashboardScreen({super.key, required this.api, required this.session});
+  final int initialNavIndex;
+
+  const DashboardScreen({super.key, required this.api, required this.session, this.initialNavIndex = kBottomNavInicioIndex});
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -31,7 +35,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   late String month;
   bool loading = true;
   String? error;
-  int navIndex = 0;
+  late int navIndex;
   List<Member> members = [];
   List<MemberParticipationItem> participation = [];
   MonthSummary? summary;
@@ -44,6 +48,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool weeklyAiLoading = false;
   String? weeklyAiMessage;
   final SharedSyncStore syncStore = SharedSyncStore();
+  final LocalPersonalStore personalStore = LocalPersonalStore();
   DateTime? lastSuccessfulSync;
   bool offlineMode = false;
   String? syncMessage;
@@ -51,6 +56,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    navIndex = widget.initialNavIndex;
     final now = DateTime.now();
     month = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}';
     _refresh();
@@ -799,7 +805,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       children: [
         const SectionTitle(
           title: 'Personal',
-          subtitle: 'Tu billetera privada queda en este dispositivo.',
+          subtitle: 'La app arranca desde tu economía privada y se conecta con Casa cuando hace falta.',
           icon: Icons.account_balance_wallet_outlined,
         ),
         AppCard(
@@ -824,10 +830,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 fallbackColor: kPrimary,
               ),
               const SizedBox(height: 14),
-              const Text('Mis cuentas', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900)),
+              const Text('Mis cuentas primero', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900)),
               const SizedBox(height: 6),
               Text(
-                'Gastos, ingresos, presupuestos, deudas personales e IA privada. No se comparte con el hogar.',
+                'Cargá tu ingreso variable del mes, tus gastos y tus deudas personales. Si estás conectado a un hogar, el ingreso se puede usar para el reparto de Casa.',
                 style: TextStyle(color: Colors.white.withOpacity(0.88), height: 1.3, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 16),
@@ -845,8 +851,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: const [
-              SectionTitle(title: 'Privado por diseño', subtitle: 'Este módulo funciona localmente. El hogar solo ve lo compartido.', icon: Icons.privacy_tip_outlined),
-              Text('Ideal para registrar cuentas personales sin mezclar todo con los gastos comunes.', style: TextStyle(color: kMuted, height: 1.35, fontWeight: FontWeight.w600)),
+              SectionTitle(title: 'Conectado con Casa', subtitle: 'Lo personal sigue siendo local; solo el ingreso mensual puede alimentar el cálculo del hogar.', icon: Icons.sync_alt_rounded),
+              Text('La carga manual de ingresos de Casa se mantiene como corrección, pero el flujo recomendado es cargar tu salario desde Personal.', style: TextStyle(color: kMuted, height: 1.35, fontWeight: FontWeight.w600)),
             ],
           ),
         ),
@@ -1421,7 +1427,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     border: Border.all(color: kPrimary.withOpacity(0.12)),
                   ),
                   child: Text(
-                    'Los ingresos son mensuales y solo afectan el reparto proporcional de $month. No se copian automáticamente al abrir un período nuevo.',
+                    'Los ingresos son mensuales y solo afectan el reparto proporcional de $month. Flujo recomendado: cada persona carga su ingreso desde Personal; esta pantalla queda para correcciones del hogar.',
                     style: const TextStyle(color: Colors.black54, fontWeight: FontWeight.w600, height: 1.25),
                   ),
                 ),
@@ -1834,13 +1840,52 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  Future<bool> _confirmImportCardExpenses(int count, double total) async {
+  String _destinationLabel(_CardImportDestination destination) {
+    switch (destination) {
+      case _CardImportDestination.common:
+        return 'Gasto común';
+      case _CardImportDestination.personal:
+        return 'Personal';
+      case _CardImportDestination.debt:
+        return 'Deuda';
+      case _CardImportDestination.skip:
+        return 'No importar';
+    }
+  }
+
+  Future<PersonalAccount> _defaultPersonalAccountForCardImport() async {
+    final snapshot = await personalStore.loadSnapshot(month: month);
+    if (snapshot.activeAccounts.isNotEmpty) return snapshot.activeAccounts.first;
+    return personalStore.createAccount(name: 'Cuenta personal', type: 'general', initialBalance: 0);
+  }
+
+  Future<PersonalCategory> _personalCategoryForCardImport(String rawName) async {
+    final name = rawName.trim().isEmpty ? 'Otros' : rawName.trim();
+    final snapshot = await personalStore.loadSnapshot(month: month);
+    for (final category in snapshot.activeExpenseCategories) {
+      if (category.name.toLowerCase() == name.toLowerCase() || category.id.toLowerCase() == name.toLowerCase()) return category;
+    }
+    return personalStore.createCategory(name: name, type: 'expense');
+  }
+
+  Future<bool> _confirmImportCardMovements({
+    required int commonCount,
+    required int personalCount,
+    required int debtCount,
+    required int skippedCount,
+    required double total,
+  }) async {
+    final parts = <String>[];
+    if (commonCount > 0) parts.add('$commonCount gasto${commonCount == 1 ? '' : 's'} común${commonCount == 1 ? '' : 'es'}');
+    if (personalCount > 0) parts.add('$personalCount gasto${personalCount == 1 ? '' : 's'} personal${personalCount == 1 ? '' : 'es'}');
+    if (debtCount > 0) parts.add('$debtCount deuda${debtCount == 1 ? '' : 's'} personal${debtCount == 1 ? '' : 'es'}');
+    if (skippedCount > 0) parts.add('$skippedCount omitido${skippedCount == 1 ? '' : 's'}');
     final result = await showDialog<bool>(
       context: context,
       barrierDismissible: true,
       builder: (context) => AlertDialog(
-        title: const Text('Importar gastos comunes'),
-        content: Text('Se cargarán $count movimiento${count == 1 ? '' : 's'} como gastos comunes del período $month, por un total de ${money.format(total)}. Podés revisar o borrar estos gastos después desde “Ver gastos del mes”.'),
+        title: const Text('Importar resumen de tarjeta'),
+        content: Text('Se procesará: ${parts.join(', ')}. Total seleccionado: ${money.format(total)}. Los gastos comunes irán a Casa; los personales y deudas quedarán solo en Personal local.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
           FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Importar')),
@@ -1896,7 +1941,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     var busy = false;
     var sheetMessage = preview.items.isEmpty
         ? 'No se detectaron movimientos importables. Podés probar con otro resumen digital.'
-        : 'Vista previa: desmarcá consumos personales, corregí los datos y confirmá solo lo que corresponde a la casa.';
+        : 'Vista previa: elegí destino por movimiento: Casa, Personal, Deuda o No importar. Nada se carga sin confirmación.';
 
     try {
       await showModalBottomSheet(
@@ -1907,52 +1952,127 @@ class _DashboardScreenState extends State<DashboardScreen> {
         backgroundColor: Colors.transparent,
         builder: (_) => StatefulBuilder(
           builder: (context, setModalState) {
-            final selectedDrafts = drafts.where((draft) => draft.selected).toList();
+            final selectedDrafts = drafts.where((draft) => draft.selected && draft.destination != _CardImportDestination.skip).toList();
             final selectedTotal = selectedDrafts.fold<double>(0, (sum, draft) => sum + _safeDraftAmount(draft));
+            final commonCount = selectedDrafts.where((draft) => draft.destination == _CardImportDestination.common).length;
+            final personalCount = selectedDrafts.where((draft) => draft.destination == _CardImportDestination.personal).length;
+            final debtCount = selectedDrafts.where((draft) => draft.destination == _CardImportDestination.debt).length;
+            final skippedCount = drafts.length - selectedDrafts.length;
 
             Future<void> importSelected() async {
               var closedAfterImport = false;
-              final selected = drafts.where((draft) => draft.selected).toList();
+              final selected = drafts.where((draft) => draft.selected && draft.destination != _CardImportDestination.skip).toList();
               if (selected.isEmpty) {
                 setModalState(() => sheetMessage = 'Seleccioná al menos un movimiento para importar.');
                 return;
               }
               try {
-                final exactDuplicates = selected.where((draft) => _isExactImportDuplicate(draft, existingExpenses)).toList();
+                final exactDuplicates = selected.where((draft) => draft.destination == _CardImportDestination.common && _isExactImportDuplicate(draft, existingExpenses)).toList();
                 if (exactDuplicates.isNotEmpty) {
-                  setModalState(() => sheetMessage = 'Hay ${exactDuplicates.length} movimiento${exactDuplicates.length == 1 ? '' : 's'} idéntico${exactDuplicates.length == 1 ? '' : 's'} a gastos ya cargados. Desmarcalos o modificá algún dato antes de importar.');
+                  setModalState(() => sheetMessage = 'Hay ${exactDuplicates.length} movimiento${exactDuplicates.length == 1 ? '' : 's'} idéntico${exactDuplicates.length == 1 ? '' : 's'} a gastos comunes ya cargados. Cambiá el destino, desmarcalos o modificá algún dato antes de importar.');
                   return;
                 }
                 final total = selected.fold<double>(0, (sum, draft) => sum + _parseMoneyInput(draft.amountController.text));
-                final confirmed = await _confirmImportCardExpenses(selected.length, total);
+                final confirmed = await _confirmImportCardMovements(
+                  commonCount: selected.where((draft) => draft.destination == _CardImportDestination.common).length,
+                  personalCount: selected.where((draft) => draft.destination == _CardImportDestination.personal).length,
+                  debtCount: selected.where((draft) => draft.destination == _CardImportDestination.debt).length,
+                  skippedCount: drafts.length - selected.length,
+                  total: total,
+                );
                 if (!confirmed) return;
                 setModalState(() {
                   busy = true;
                   sheetMessage = 'Importando movimientos seleccionados...';
                 });
-                var imported = 0;
+                var importedCommon = 0;
+                var importedPersonal = 0;
+                var importedDebt = 0;
+                final failures = <String>[];
+                PersonalAccount? personalAccount;
                 for (final draft in selected) {
-                  final note = draft.noteController.text.trim();
-                  final description = draft.descriptionController.text.trim().isEmpty ? 'Movimiento importado de tarjeta' : draft.descriptionController.text.trim();
-                  await widget.api.createExpense(
-                    paidByMemberId: draft.paidByMemberId,
-                    amount: _parseMoneyInput(draft.amountController.text),
-                    category: draft.categoryController.text.trim().isEmpty ? 'General' : draft.categoryController.text.trim(),
-                    description: note.isEmpty ? description : '$description · $note',
-                    date: _parseCardImportDate(draft.dateController.text),
-                  );
-                  imported += 1;
+                  try {
+                    final note = draft.noteController.text.trim();
+                    final description = draft.descriptionController.text.trim().isEmpty ? 'Movimiento importado de tarjeta' : draft.descriptionController.text.trim();
+                    final amount = _parseMoneyInput(draft.amountController.text);
+                    final category = draft.categoryController.text.trim().isEmpty ? 'General' : draft.categoryController.text.trim();
+                    final date = _parseCardImportDate(draft.dateController.text);
+                    final fullDescription = note.isEmpty ? description : '$description · $note';
+                    switch (draft.destination) {
+                      case _CardImportDestination.common:
+                        await widget.api.createExpense(
+                          paidByMemberId: draft.paidByMemberId,
+                          amount: amount,
+                          category: category,
+                          description: fullDescription,
+                          date: date,
+                        );
+                        importedCommon += 1;
+                        break;
+                      case _CardImportDestination.personal:
+                        final account = personalAccount ??= await _defaultPersonalAccountForCardImport();
+                        final personalCategory = await _personalCategoryForCardImport(category);
+                        await personalStore.createExpense(
+                          accountId: account.id,
+                          amount: amount,
+                          category: personalCategory,
+                          description: fullDescription,
+                          date: date,
+                          source: 'card_import',
+                          sourceMonth: month,
+                          sourceType: 'card_summary',
+                        );
+                        importedPersonal += 1;
+                        break;
+                      case _CardImportDestination.debt:
+                        await personalStore.createDebt(
+                          title: description,
+                          counterparty: 'Tarjeta',
+                          direction: 'i_owe',
+                          amount: amount,
+                          note: 'Importado desde resumen de tarjeta. Fecha: ${_dateOnly(date)}. Categoría: $category.${note.isEmpty ? '' : ' Nota: $note'}',
+                        );
+                        importedDebt += 1;
+                        break;
+                      case _CardImportDestination.skip:
+                        break;
+                    }
+                  } on FormatException {
+                    failures.add('${draft.descriptionController.text.trim().isEmpty ? 'Movimiento sin descripción' : draft.descriptionController.text.trim()}: fecha o monto inválido.');
+                  } catch (e) {
+                    failures.add('${draft.descriptionController.text.trim().isEmpty ? 'Movimiento sin descripción' : draft.descriptionController.text.trim()}: ${friendlyMessage(e)}');
+                  }
                 }
-                await _refresh();
+                if (importedCommon > 0) await _refresh();
                 if (mounted) {
                   Navigator.pop(context);
                   closedAfterImport = true;
                 }
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Se importaron $imported gasto${imported == 1 ? '' : 's'} común${imported == 1 ? '' : 'es'} desde el resumen.')));
+                  final importedTotal = importedCommon + importedPersonal + importedDebt;
+                  final summaryParts = <String>[
+                    '$importedCommon comunes',
+                    '$importedPersonal personales',
+                    '$importedDebt deudas',
+                    '${drafts.length - selected.length} omitidos',
+                  ];
+                  final failedText = failures.isEmpty ? '' : ' · ${failures.length} fallidos';
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Importación lista: ${summaryParts.join(' · ')}$failedText.')));
+                  if (failures.isNotEmpty) {
+                    await showDialog<void>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('Movimientos no importados'),
+                        content: SingleChildScrollView(
+                          child: Text(failures.take(8).join('\n')),
+                        ),
+                        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Entendido'))],
+                      ),
+                    );
+                  } else if (importedTotal == 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se importó ningún movimiento.')));
+                  }
                 }
-              } on FormatException {
-                setModalState(() => sheetMessage = 'Revisá fechas y montos antes de importar.');
               } catch (e) {
                 setModalState(() => sheetMessage = friendlyMessage(e));
               } finally {
@@ -1962,7 +2082,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
             return _SheetFrame(
               title: 'Importar resumen de tarjeta',
-              subtitle: 'Seleccioná solo consumos de la casa. Nada se carga sin confirmación.',
+              subtitle: 'Revisá cada candidato y elegí si va a Casa, Personal, Deuda o se omite.',
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -2002,7 +2122,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       children: [
                         Expanded(
                           child: Text(
-                            '${selectedDrafts.length} seleccionado${selectedDrafts.length == 1 ? '' : 's'} · ${money.format(selectedTotal)}',
+                            '${selectedDrafts.length} a importar · ${money.format(selectedTotal)} · Casa $commonCount · Personal $personalCount · Deuda $debtCount · Omitidos $skippedCount',
                             style: const TextStyle(color: kInk, fontWeight: FontWeight.w900),
                           ),
                         ),
@@ -2039,12 +2159,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   BigActionButton(
                     onPressed: busy || selectedDrafts.isEmpty ? null : importSelected,
                     icon: Icons.playlist_add_check_circle_outlined,
-                    title: busy ? 'Importando...' : 'Importar seleccionados como gastos comunes',
-                    subtitle: 'Se cargarán en el período $month. Podés borrar gastos luego desde “Ver gastos del mes”.',
+                    title: busy ? 'Importando...' : 'Importar seleccionados',
+                    subtitle: 'Casa usa gastos comunes. Personal y Deuda quedan guardados solo en este dispositivo.',
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Tip: desmarcá consumos personales o movimientos del resumen que no correspondan a la casa.',
+                    'Tip: para evitar confusiones, mandá a Personal lo privado, a Deuda lo pendiente de pagar y a Casa solo lo compartido.',
                     style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, height: 1.25),
                   ),
                 ],
@@ -2082,7 +2202,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 value: selected,
                 items: members.map((m) => DropdownMenuItem(value: m, child: Text('Pagó ${m.name}'))).toList(),
                 onChanged: (value) => setModalState(() => selected = value ?? selected),
-                decoration: const InputDecoration(labelText: 'Quién pagó'),
+                decoration: const InputDecoration(labelText: 'Quién pagó gasto común'),
               ),
               const SizedBox(height: 10),
               TextField(controller: amountController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Monto')),
@@ -2124,15 +2244,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
 
 
+enum _CardImportDestination { common, personal, debt, skip }
+
 class _CardImportDraft {
   bool selected;
   bool possibleDuplicate;
   int paidByMemberId;
+  _CardImportDestination destination;
   final TextEditingController dateController;
   final TextEditingController descriptionController;
   final TextEditingController amountController;
   final TextEditingController categoryController;
   final TextEditingController noteController;
+  final String? installments;
+  final String? observation;
   final String rawText;
   final double confidence;
 
@@ -2140,11 +2265,14 @@ class _CardImportDraft {
     required this.selected,
     required this.possibleDuplicate,
     required this.paidByMemberId,
+    required this.destination,
     required this.dateController,
     required this.descriptionController,
     required this.amountController,
     required this.categoryController,
     required this.noteController,
+    required this.installments,
+    required this.observation,
     required this.rawText,
     required this.confidence,
   });
@@ -2154,11 +2282,14 @@ class _CardImportDraft {
       selected: true,
       possibleDuplicate: false,
       paidByMemberId: defaultPaidByMemberId,
+      destination: _CardImportDestination.common,
       dateController: TextEditingController(text: dateText),
       descriptionController: TextEditingController(text: item.description),
       amountController: TextEditingController(text: item.amount.toStringAsFixed(0)),
       categoryController: TextEditingController(text: item.category.isEmpty ? 'General' : item.category),
       noteController: TextEditingController(text: 'Importado desde resumen de tarjeta'),
+      installments: item.installments,
+      observation: item.observation,
       rawText: item.rawText,
       confidence: item.confidence,
     );
@@ -2190,6 +2321,19 @@ class _CardImportDraftCard extends StatelessWidget {
     required this.onDiscard,
   });
 
+  String _destinationLabel(_CardImportDestination destination) {
+    switch (destination) {
+      case _CardImportDestination.common:
+        return 'Gasto común';
+      case _CardImportDestination.personal:
+        return 'Personal';
+      case _CardImportDestination.debt:
+        return 'Deuda';
+      case _CardImportDestination.skip:
+        return 'No importar';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final amount = double.tryParse(draft.amountController.text.trim().replaceAll('.', '').replaceAll(',', '.')) ?? 0;
@@ -2208,6 +2352,9 @@ class _CardImportDraftCard extends StatelessWidget {
                 onChanged: enabled
                     ? (value) {
                         draft.selected = value ?? false;
+                        if (draft.selected && draft.destination == _CardImportDestination.skip) {
+                          draft.destination = _CardImportDestination.common;
+                        }
                         onChanged();
                       }
                     : null,
@@ -2225,7 +2372,7 @@ class _CardImportDraftCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      '${money.format(amount)} · confianza ${(draft.confidence * 100).round()}%',
+                      '${money.format(amount)} · ${_destinationLabel(draft.destination)} · confianza ${(draft.confidence * 100).round()}%${draft.installments == null || draft.installments!.isEmpty ? '' : ' · cuota ${draft.installments}'}',
                       style: const TextStyle(color: kPrimary, fontWeight: FontWeight.w900),
                     ),
                   ],
@@ -2250,9 +2397,36 @@ class _CardImportDraftCard extends StatelessWidget {
               ),
             ),
           ],
+          if (draft.observation != null && draft.observation!.trim().isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: kLavender, borderRadius: BorderRadius.circular(16)),
+              child: Text(
+                draft.observation!,
+                style: const TextStyle(color: kMuted, fontWeight: FontWeight.w800, height: 1.25),
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          DropdownButtonFormField<_CardImportDestination>(
+            value: draft.destination,
+            items: _CardImportDestination.values
+                .map((destination) => DropdownMenuItem(value: destination, child: Text(_destinationLabel(destination))))
+                .toList(),
+            onChanged: enabled
+                ? (value) {
+                    draft.destination = value ?? draft.destination;
+                    draft.selected = draft.destination != _CardImportDestination.skip;
+                    onChanged();
+                  }
+                : null,
+            decoration: const InputDecoration(labelText: 'Destino'),
+          ),
           const SizedBox(height: 10),
           TextField(
-            enabled: enabled && draft.selected,
+            enabled: enabled && draft.selected && draft.destination != _CardImportDestination.skip,
             controller: draft.descriptionController,
             onChanged: (_) => onChanged(),
             decoration: const InputDecoration(labelText: 'Descripción'),
@@ -2262,7 +2436,7 @@ class _CardImportDraftCard extends StatelessWidget {
             children: [
               Expanded(
                 child: TextField(
-                  enabled: enabled && draft.selected,
+                  enabled: enabled && draft.selected && draft.destination != _CardImportDestination.skip,
                   controller: draft.dateController,
                   onChanged: (_) => onChanged(),
                   decoration: const InputDecoration(labelText: 'Fecha'),
@@ -2271,7 +2445,7 @@ class _CardImportDraftCard extends StatelessWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: TextField(
-                  enabled: enabled && draft.selected,
+                  enabled: enabled && draft.selected && draft.destination != _CardImportDestination.skip,
                   controller: draft.amountController,
                   onChanged: (_) => onChanged(),
                   keyboardType: TextInputType.number,
@@ -2283,7 +2457,7 @@ class _CardImportDraftCard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           TextField(
-            enabled: enabled && draft.selected,
+            enabled: enabled && draft.selected && draft.destination != _CardImportDestination.skip,
             controller: draft.categoryController,
             onChanged: (_) => onChanged(),
             decoration: const InputDecoration(labelText: 'Categoría'),
@@ -2292,17 +2466,17 @@ class _CardImportDraftCard extends StatelessWidget {
           DropdownButtonFormField<int>(
             value: members.any((member) => member.id == draft.paidByMemberId) ? draft.paidByMemberId : members.first.id,
             items: members.map((member) => DropdownMenuItem(value: member.id, child: Text('Pagó ${member.name}'))).toList(),
-            onChanged: enabled && draft.selected
+            onChanged: enabled && draft.selected && draft.destination == _CardImportDestination.common
                 ? (value) {
                     draft.paidByMemberId = value ?? draft.paidByMemberId;
                     onChanged();
                   }
                 : null,
-            decoration: const InputDecoration(labelText: 'Quién pagó'),
+            decoration: const InputDecoration(labelText: 'Quién pagó gasto común'),
           ),
           const SizedBox(height: 10),
           TextField(
-            enabled: enabled && draft.selected,
+            enabled: enabled && draft.selected && draft.destination != _CardImportDestination.skip,
             controller: draft.noteController,
             onChanged: (_) => onChanged(),
             decoration: const InputDecoration(labelText: 'Nota interna'),

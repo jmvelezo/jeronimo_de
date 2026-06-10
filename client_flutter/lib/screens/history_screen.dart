@@ -29,6 +29,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   bool loading = true;
   String? error;
   List<MonthlyCloseItem> closes = [];
+  List<MonthPeriodStatusItem> periodStatuses = [];
 
   @override
   void initState() {
@@ -44,6 +45,22 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return "${next.year.toString().padLeft(4, '0')}-${next.month.toString().padLeft(2, '0')}";
   }
 
+  String _periodStatusLabel(MonthPeriodStatusItem period) {
+    if (period.isActive && period.isClosed) return 'Activo cerrado';
+    if (period.isActive) return 'Mes operativo activo';
+    if (period.isClosed) return 'Mes cerrado';
+    return 'Con datos, sin cierre';
+  }
+
+  String _periodStatusDetail(MonthPeriodStatusItem period) {
+    final parts = <String>[];
+    if (period.incomeCount > 0) parts.add('${period.incomeCount} ingresos');
+    if (period.expenseCount > 0) parts.add('${period.expenseCount} gastos');
+    if (period.advancePaymentCount > 0) parts.add('${period.advancePaymentCount} pagos anticipados');
+    if (parts.isEmpty) return 'Sin movimientos cargados todavía.';
+    return parts.join(' · ');
+  }
+
   Future<void> _load() async {
     setState(() {
       loading = true;
@@ -51,7 +68,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
     });
     try {
       final loaded = await widget.api.getMonthlyCloses();
-      setState(() => closes = loaded);
+      final statuses = await widget.api.getMonthPeriodStatuses();
+      setState(() {
+        closes = loaded;
+        periodStatuses = statuses;
+      });
     } catch (e) {
       setState(() => error = friendlyMessage(e));
     } finally {
@@ -73,7 +94,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Se guarda una foto del mes. Luego no se podrán modificar ingresos, gastos ni deudas automáticas de ese mes hasta reabrirlo.',
+                'Se guarda una foto del mes. Luego no se podrán modificar ingresos, gastos ni deudas automáticas de ese mes hasta reabrirlo. El mes operativo solo cambia cuando cerrás el período y elegís avanzar.',
               ),
               const SizedBox(height: 14),
               CheckboxListTile(
@@ -196,6 +217,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   const Text('Cierre mensual', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
                   const SizedBox(height: 8),
                   Text('Mes activo: ${widget.currentMonth}'),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'El mes operativo solo cambia cuando cerrás el período. No avanza solo por fecha calendario.',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
                   const SizedBox(height: 12),
                   ElevatedButton.icon(
                     onPressed: _closeCurrentMonth,
@@ -209,9 +235,30 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     label: const Text('Reiniciar período activo'),
                   ),
                   const SizedBox(height: 8),
-                  const Text('El cierre protege el mes contra cambios accidentales. Si pasás al siguiente período, ingresos y gastos arrancan vacíos sin borrar el historial.'),
+                  const Text('El cierre protege el mes contra cambios accidentales. Si pasás al siguiente período, ingresos y gastos arrancan vacíos sin borrar el historial. La app no cambia de período por calendario.'),
                   const SizedBox(height: 6),
                   const Text('Reiniciar período activo vacía ingresos, gastos y pagos anticipados del período actual no cerrado. No toca meses cerrados, deudas formales, abonos de deudas ni saldos a favor.'),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            AppCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Períodos registrados', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 8),
+                  if (!loading && periodStatuses.isEmpty)
+                    const Text('Todavía no hay meses con datos registrados.'),
+                  for (final period in periodStatuses) ...[
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: Text('${period.month} · ${_periodStatusLabel(period)}'),
+                      subtitle: Text('${_periodStatusDetail(period)} · Ingresos ${money.format(period.totalIncome)} · Gastos ${money.format(period.totalSharedExpenses)}'),
+                    ),
+                    const Divider(height: 8),
+                  ],
                 ],
               ),
             ),
@@ -268,6 +315,13 @@ class _CloseCard extends StatelessWidget {
         subtitle: Text('Gastos: ${money.format(close.totalSharedExpenses)} · Ingresos: ${money.format(close.totalIncome)}'),
         children: [
           const SizedBox(height: 8),
+          if ((close.summary.warning ?? '').isNotEmpty) ...[
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(close.summary.warning!, style: const TextStyle(fontWeight: FontWeight.w600)),
+            ),
+            const SizedBox(height: 8),
+          ],
           for (final member in close.summary.members)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),

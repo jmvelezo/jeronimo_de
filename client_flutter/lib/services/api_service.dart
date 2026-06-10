@@ -464,6 +464,12 @@ class ApiService {
     return (jsonDecode(response.body) as List).map((item) => MonthlyCloseItem.fromJson(item)).toList();
   }
 
+  Future<List<MonthPeriodStatusItem>> getMonthPeriodStatuses() async {
+    final response = await http.get(_uri('/finance/month-periods'), headers: _headers);
+    if (response.statusCode != 200) throw Exception(_extractError(response));
+    return (jsonDecode(response.body) as List).map((item) => MonthPeriodStatusItem.fromJson(item)).toList();
+  }
+
   Future<void> reopenMonth(String month, {String reason = ''}) async {
     final response = await http.post(
       _uri('/finance/monthly-closes/$month/reopen'),
