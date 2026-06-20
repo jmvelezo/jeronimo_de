@@ -199,11 +199,24 @@ class ApiService {
     return Member.fromJson(jsonDecode(response.body));
   }
 
-  Future<void> saveIncome({required int memberId, required String month, required double amount}) async {
+  Future<void> saveIncome({required int memberId, required String month, required double amount, String? note}) async {
+    final body = <String, dynamic>{'member_id': memberId, 'month': month, 'amount': amount};
+    if (note != null) body['note'] = note;
     final response = await http.post(
       _uri('/finance/income'),
       headers: _headers,
-      body: jsonEncode({'member_id': memberId, 'month': month, 'amount': amount}),
+      body: jsonEncode(body),
+    );
+    if (response.statusCode != 200) throw Exception(_extractError(response));
+  }
+
+  Future<void> saveMyIncome({required String month, required double amount, String? note}) async {
+    final body = <String, dynamic>{'month': month, 'amount': amount};
+    if (note != null) body['note'] = note;
+    final response = await http.post(
+      _uri('/finance/income/me'),
+      headers: _headers,
+      body: jsonEncode(body),
     );
     if (response.statusCode != 200) throw Exception(_extractError(response));
   }
@@ -390,6 +403,19 @@ class ApiService {
     if (response.statusCode != 200) throw Exception(_extractError(response));
   }
 
+  Future<void> increaseDebt({
+    required int debtId,
+    required double amount,
+    required String reason,
+  }) async {
+    final response = await http.patch(
+      _uri('/finance/debts/$debtId/increase'),
+      headers: _headers,
+      body: jsonEncode({'amount': amount, 'reason': reason}),
+    );
+    if (response.statusCode != 200) throw Exception(_extractError(response));
+  }
+
   Future<void> addDebtPayment({
     required int debtId,
     required double amount,
@@ -448,7 +474,7 @@ class ApiService {
     if (response.statusCode != 200) throw Exception(_extractError(response));
   }
 
-  Future<MonthlyCloseItem> closeMonth(String month, {bool advanceToNext = false}) async {
+  Future<MonthlyCloseItem> closeMonth(String month, {bool advanceToNext = true}) async {
     final response = await http.post(
       _uri('/finance/monthly-closes'),
       headers: _headers,

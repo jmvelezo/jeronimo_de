@@ -217,8 +217,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      isDismissible: true,
-      enableDrag: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => Padding(
           padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
@@ -246,6 +246,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
               const SizedBox(height: 10),
               TextField(controller: reasonController, decoration: const InputDecoration(labelText: 'Motivo')), 
               const SizedBox(height: 16),
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+              const SizedBox(height: 8),
               ElevatedButton(
                 onPressed: () async {
                   try {
@@ -277,8 +279,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      isDismissible: true,
-      enableDrag: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => Padding(
         padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
         child: Column(
@@ -295,6 +297,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
             const SizedBox(height: 10),
             TextField(controller: noteController, decoration: const InputDecoration(labelText: 'Nota opcional')), 
             const SizedBox(height: 16),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+            const SizedBox(height: 8),
             ElevatedButton(
               onPressed: () async {
                 try {
@@ -375,7 +379,7 @@ class _DebtsScreenState extends State<DebtsScreen> {
     final reasonController = TextEditingController();
     final confirmed = await showDialog<bool>(
       context: context,
-      barrierDismissible: true,
+      barrierDismissible: false,
       builder: (_) => AlertDialog(
         title: const Text('Rechazar abono'),
         content: TextField(controller: reasonController, decoration: const InputDecoration(labelText: 'Motivo opcional')),
@@ -419,8 +423,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      isDismissible: true,
-      enableDrag: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => Padding(
           padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
@@ -462,6 +466,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
                 ),
               ),
               const SizedBox(height: 16),
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+              const SizedBox(height: 8),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(

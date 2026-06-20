@@ -81,50 +81,34 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Future<void> _closeCurrentMonth() async {
-    var advanceToNext = true;
     final nextMonth = _nextMonth(widget.currentMonth);
     final confirmed = await showDialog<bool>(
       context: context,
-      barrierDismissible: true,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text('Cerrar ${widget.currentMonth}'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Se guarda una foto del mes. Luego no se podrán modificar ingresos, gastos ni deudas automáticas de ese mes hasta reabrirlo. El mes operativo solo cambia cuando cerrás el período y elegís avanzar.',
-              ),
-              const SizedBox(height: 14),
-              CheckboxListTile(
-                value: advanceToNext,
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-                title: Text('Pasar al período $nextMonth vacío'),
-                subtitle: const Text('No se borran los datos cerrados. Se abre un nuevo período para cargar ingresos y gastos desde cero.'),
-                onChanged: (value) => setDialogState(() => advanceToNext = value ?? true),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-            ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Cerrar mes')),
-          ],
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text('Cerrar ${widget.currentMonth}'),
+        content: Text(
+          'Se guarda una foto del mes en el historial. Luego ${widget.currentMonth} queda protegido contra cambios accidentales y el mes operativo pasa a $nextMonth vacío para cargar ingresos y gastos desde cero. No se borra ningún dato del mes cerrado.',
         ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Cerrar mes y pasar al siguiente'),
+          ),
+        ],
       ),
     );
     if (confirmed != true) return;
 
     try {
-      await widget.api.closeMonth(widget.currentMonth, advanceToNext: advanceToNext);
+      await widget.api.closeMonth(widget.currentMonth, advanceToNext: true);
       await _load();
       await widget.onChanged();
       if (mounted) {
-        final message = advanceToNext
-            ? 'Mes cerrado. Se abrió el período $nextMonth para empezar de cero.'
-            : 'Mes cerrado y guardado en historial.';
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Mes cerrado. Se abrió el período $nextMonth para empezar de cero.')),
+        );
       }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
@@ -135,7 +119,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Future<void> _resetActivePeriodBasic() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      barrierDismissible: true,
+      barrierDismissible: false,
       builder: (context) => AlertDialog(
         title: Text('Reiniciar ${widget.currentMonth}'),
         content: Text(
@@ -176,7 +160,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Future<void> _reopenMonth(String month) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      barrierDismissible: true,
+      barrierDismissible: false,
       builder: (context) => AlertDialog(
         title: Text('Reabrir $month'),
         content: const Text('El cierre se elimina para permitir correcciones. Los gastos y deudas ya cargadas no se borran.'),
@@ -226,7 +210,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   ElevatedButton.icon(
                     onPressed: _closeCurrentMonth,
                     icon: const Icon(Icons.lock_outline),
-                    label: const Text('Cerrar mes activo'),
+                    label: const Text('Cerrar mes y pasar al siguiente'),
                   ),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(

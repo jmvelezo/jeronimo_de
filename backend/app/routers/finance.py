@@ -1,6 +1,8 @@
 import json
 import re
+import unicodedata
 from io import BytesIO
+from types import SimpleNamespace
 from datetime import date as Date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlmodel import Session, select
@@ -30,6 +32,7 @@ from ..schemas import (
     CardImportPreviewResponse,
     DebtCancel,
     DebtCreate,
+    DebtIncrease,
     CreditBalanceApply,
     CreditBalanceRead,
     DebtPaymentCreate,
@@ -42,6 +45,7 @@ from ..schemas import (
     FixedExpenseTemplateRead,
     FixedExpenseTemplateUpdate,
     IncomeRead,
+    IncomeSelfUpsert,
     IncomeUpsert,
     MemberParticipationRead,
     MemberParticipationUpdate,
@@ -141,7 +145,9 @@ def _extract_pdf_text(file_bytes: bytes) -> tuple[str, list[str]]:
         if page_count > 12:
             warnings.append('El PDF tiene más de 12 páginas. Se leyó la primera parte para mantener la vista previa liviana.')
         if page_count:
-            warnings.append(f'Se leyó texto de {min(page_count, 12)} página{'' if min(page_count, 12) == 1 else 's'} del PDF.')
+            pages_read = min(page_count, 12)
+            page_suffix = '' if pages_read == 1 else 's'
+            warnings.append(f'Se leyó texto de {pages_read} página{page_suffix} del PDF.')
     except Exception as exc:
         raise HTTPException(status_code=400, detail='No se pudo leer el PDF. Probá con un resumen digital, no escaneado.') from exc
     if not text:
@@ -153,14 +159,51 @@ def _clean_card_line(raw: str) -> str:
     return re.sub(r'\s+', ' ', raw.replace('\xa0', ' ')).strip()
 
 
-def _line_windows(lines: list[str]) -> list[tuple[str, int]]:
-    windows: list[tuple[str, int]] = []
+def _strip_card_accents(value: str) -> str:
+    normalized = unicodedata.normalize('NFKD', value)
+    return ''.join(char for char in normalized if not unicodedata.combining(char))
+
+
+def _normalize_card_description(description: str) -> str:
+    text = _strip_card_accents(description).lower()
+    text = re.sub(r'\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b', ' ', text)
+    text = re.sub(r'\b(?:ars|pesos|usd|u\$s|visa|mastercard|master|tarjeta|debito|credito)\b', ' ', text)
+    text = re.sub(r'\b(?:compra|consumo|establecimiento|comprobante|autorizacion|cuotas?|plan|nro|numero)\b', ' ', text)
+    text = re.sub(r'\b\d{3,}\b', ' ', text)
+    text = re.sub(r'[^a-z0-9]+', ' ', text)
+    tokens = [token for token in text.split() if len(token) > 1]
+    return ' '.join(tokens)[:96]
+
+
+def _descriptions_look_duplicated(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left == right or left in right or right in left:
+        return True
+    left_tokens = set(left.split())
+    right_tokens = set(right.split())
+    if not left_tokens or not right_tokens:
+        return False
+    overlap = len(left_tokens & right_tokens)
+    return overlap >= 2 and overlap / min(len(left_tokens), len(right_tokens)) >= 0.75
+
+
+def _line_looks_like_transaction_start(line: str) -> bool:
+    if _looks_like_summary_line(line):
+        return False
+    has_date = re.search(r'^\s*\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b', line) is not None
+    has_amount = re.search(r'(?:\$\s*)?-?\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|-?\d+(?:,\d{2})', line) is not None
+    return has_date and has_amount
+
+
+def _line_windows(lines: list[str]) -> list[tuple[str, int, int]]:
+    windows: list[tuple[str, int, int]] = []
     for index, line in enumerate(lines):
-        windows.append((line, index))
-        if index + 1 < len(lines):
-            windows.append((f'{line} {lines[index + 1]}', index))
-        if index + 2 < len(lines):
-            windows.append((f'{line} {lines[index + 1]} {lines[index + 2]}', index))
+        windows.append((line, index, 1))
+        if index + 1 < len(lines) and not _line_looks_like_transaction_start(lines[index + 1]):
+            windows.append((f'{line} {lines[index + 1]}', index, 2))
+            if index + 2 < len(lines) and not _line_looks_like_transaction_start(lines[index + 2]):
+                windows.append((f'{line} {lines[index + 1]} {lines[index + 2]}', index, 3))
     return windows
 
 
@@ -251,13 +294,15 @@ def _detect_card_movements(text: str, fallback_month: str | None = None) -> tupl
     amount_re = re.compile(r'(?<!\d)(?:\$\s*)?-?\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|-?\d+(?:,\d{2})(?!\d)')
     lines = [_clean_card_line(line) for line in text.splitlines()]
     lines = [line for line in lines if len(line) >= 4]
-    seen: set[tuple[str, str, int]] = set()
+    seen: dict[tuple[str, int, str], list[str]] = {}
     scanned = 0
     skipped_summary = 0
     skipped_invalid_amount = 0
+    skipped_duplicates = 0
+    skipped_mixed_windows = 0
     without_date = 0
 
-    for line, index in _line_windows(lines):
+    for line, index, window_size in _line_windows(lines):
         if len(line) < 8:
             continue
         scanned += 1
@@ -268,6 +313,13 @@ def _detect_card_movements(text: str, fallback_month: str | None = None) -> tupl
         amount_matches = list(amount_re.finditer(line))
         if not amount_matches:
             continue
+        if window_size > 1:
+            valid_dates = [match for match in date_re.finditer(line) if _parse_card_date(match.group(1), fallback_month) is not None]
+            if len(valid_dates) >= 2 and len(amount_matches) >= 2:
+                # Una ventana que une dos líneas completas suele mezclar dos consumos distintos.
+                # En ese caso se conserva cada línea por separado y se descarta esta combinación.
+                skipped_mixed_windows += 1
+                continue
         if not date_match and not _candidate_without_date(line, fallback_month):
             without_date += 1
             continue
@@ -281,11 +333,16 @@ def _detect_card_movements(text: str, fallback_month: str | None = None) -> tupl
         if _looks_like_summary_line(description):
             skipped_summary += 1
             continue
-        key = (parsed_date.isoformat() if parsed_date else f'{fallback_month or ''}-sin-fecha-{index}', description.lower(), int(round(amount * 100)))
-        if key in seen:
-            continue
-        seen.add(key)
         installments = _extract_installments(line)
+        normalized_description = _normalize_card_description(description)
+        date_key = parsed_date.isoformat() if parsed_date else f"{fallback_month or ''}-sin-fecha-{index}"
+        amount_cents = int(round(amount * 100))
+        duplicate_key = (date_key, amount_cents, installments or '')
+        related_descriptions = seen.setdefault(duplicate_key, [])
+        if any(_descriptions_look_duplicated(existing, normalized_description) for existing in related_descriptions):
+            skipped_duplicates += 1
+            continue
+        related_descriptions.append(normalized_description)
         observation: str | None = None
         confidence = 0.74 if parsed_date else 0.52
         if date_match is None:
@@ -317,9 +374,17 @@ def _detect_card_movements(text: str, fallback_month: str | None = None) -> tupl
     if not items and text.strip():
         warnings.append('No se detectaron movimientos con el formato esperado. El resumen puede tener columnas no compatibles todavía.')
     else:
-        warnings.append(f'Se detectaron {len(items)} movimiento{'' if len(items) == 1 else 's'} candidato{'' if len(items) == 1 else 's'} para revisar antes de importar.')
+        item_suffix = '' if len(items) == 1 else 's'
+        warnings.append(f'Se detectaron {len(items)} movimiento{item_suffix} candidato{item_suffix} para revisar antes de importar.')
         if skipped_summary:
-            warnings.append(f'Se omitieron {skipped_summary} línea{'' if skipped_summary == 1 else 's'} que parecían totales, saldos, vencimientos o datos del resumen.')
+            summary_suffix = '' if skipped_summary == 1 else 's'
+            warnings.append(f'Se omitieron {skipped_summary} línea{summary_suffix} que parecían totales, saldos, vencimientos o datos del resumen.')
+        if skipped_mixed_windows:
+            mixed_suffix = '' if skipped_mixed_windows == 1 else 'es'
+            warnings.append(f'Se descartaron {skipped_mixed_windows} combinación{mixed_suffix} de líneas que parecían mezclar consumos distintos.')
+        if skipped_duplicates:
+            duplicate_suffix = '' if skipped_duplicates == 1 else 's'
+            warnings.append(f'Se ocultaron {skipped_duplicates} posible{duplicate_suffix} duplicado{duplicate_suffix} por fecha, monto, cuota y descripción similar.')
         if without_date:
             warnings.append('Algunas líneas con importe no se mostraron porque no tenían fecha ni señales claras de consumo.')
         if skipped_invalid_amount:
@@ -649,7 +714,7 @@ def monthly_close_to_read(close: MonthlyClose) -> MonthlyCloseRead:
     )
 
 
-def build_month_summary(month: str, household_id: int, session: Session) -> MonthSummary:
+def _monthly_summary_inputs(month: str, household_id: int, session: Session):
     members = session.exec(select(Member).where(Member.household_id == household_id)).all()
     incomes = session.exec(
         select(MonthlyIncome).where(MonthlyIncome.household_id == household_id, MonthlyIncome.month == month)
@@ -659,13 +724,141 @@ def build_month_summary(month: str, household_id: int, session: Session) -> Mont
         select(MonthlyParticipation).where(MonthlyParticipation.household_id == household_id, MonthlyParticipation.month == month)
     ).all()
     advance_payments = session.exec(
-        select(MonthlyAdvancePayment).where(
+        select(MonthlyAdvancePayment)
+        .where(
             MonthlyAdvancePayment.household_id == household_id,
             MonthlyAdvancePayment.month == month,
             MonthlyAdvancePayment.status == PaymentStatus.confirmed,
         )
+        .order_by(MonthlyAdvancePayment.date.asc(), MonthlyAdvancePayment.created_at.asc(), MonthlyAdvancePayment.id.asc())
     ).all()
-    summary = calculate_month_summary(month, members, incomes, expenses, participations, advance_payments)
+    return members, incomes, expenses, participations, advance_payments
+
+
+def _advance_credit_reason(payment: MonthlyAdvancePayment) -> str:
+    return f"Excedente confirmado del pago anticipado #{payment.id} del período {payment.month}"
+
+
+def _advance_payment_allocations(
+    month: str,
+    members: list[Member],
+    incomes: list[MonthlyIncome],
+    expenses: list[Expense],
+    participations: list[MonthlyParticipation],
+    advance_payments: list[MonthlyAdvancePayment],
+) -> dict[int, tuple[float, float]]:
+    """Calcula aplicación vigente de pagos anticipados contra el resumen actual.
+
+    La confirmación del pago es un hecho real, pero su aplicación no debe quedar
+    congelada con el estado del mes al momento de confirmar. Por eso se calcula
+    primero el saldo base sin pagos anticipados y luego se aplican, en orden,
+    contra el saldo vivo de cada par de integrantes.
+    """
+    base_summary_raw = calculate_month_summary(month, members, incomes, expenses, participations, [])
+    base_summary = MonthSummary.model_validate(base_summary_raw)
+
+    # FASE 23: la aplicación del pago anticipado se calcula contra la deuda
+    # viva del pagador y el crédito vivo del receptor, no contra "lo que ya
+    # pagó en gastos comunes" ni contra un valor congelado de confirmación.
+    # Esto evita casos como: deuda vigente 581.066, pago confirmado 1.186.000,
+    # pero aplicado erróneo 97.453.
+    live_balance_by_member = {item.member_id: round_money(item.balance) for item in base_summary.members}
+
+    allocations: dict[int, tuple[float, float]] = {}
+    for payment in advance_payments:
+        payment_id = payment.id or 0
+        payer_balance = round_money(live_balance_by_member.get(payment.paid_by_member_id, 0))
+        receiver_balance = round_money(live_balance_by_member.get(payment.received_by_member_id, 0))
+        payer_debt = round_money(max(-payer_balance, 0))
+        receiver_credit = round_money(max(receiver_balance, 0))
+        applicable_now = round_money(min(payment.amount, payer_debt, receiver_credit))
+        applied = applicable_now
+        credit = round_money(max(payment.amount - applied, 0))
+        allocations[payment_id] = (applied, credit)
+        if applied > 0.01:
+            live_balance_by_member[payment.paid_by_member_id] = round_money(payer_balance + applied)
+            live_balance_by_member[payment.received_by_member_id] = round_money(receiver_balance - applied)
+    return allocations
+
+
+def _advance_payment_views(
+    advance_payments: list[MonthlyAdvancePayment],
+    allocations: dict[int, tuple[float, float]],
+):
+    views = []
+    for payment in advance_payments:
+        applied, _ = allocations.get(payment.id or 0, (0.0, round_money(payment.amount)))
+        views.append(
+            SimpleNamespace(
+                paid_by_member_id=payment.paid_by_member_id,
+                received_by_member_id=payment.received_by_member_id,
+                applied_amount=applied,
+            )
+        )
+    return views
+
+
+def _sync_monthly_advance_allocations(month: str, household_id: int, session: Session) -> bool:
+    members, incomes, expenses, participations, advance_payments = _monthly_summary_inputs(month, household_id, session)
+    allocations = _advance_payment_allocations(month, members, incomes, expenses, participations, advance_payments)
+    changed = False
+
+    for payment in advance_payments:
+        applied, credit = allocations.get(payment.id or 0, (0.0, round_money(payment.amount)))
+        if round_money(payment.applied_amount) != applied or round_money(payment.credit_amount) != credit:
+            payment.applied_amount = applied
+            payment.credit_amount = credit
+            payment.updated_at = datetime.now(timezone.utc)
+            session.add(payment)
+            changed = True
+
+        # Compatibilidad con datos previos: algunas confirmaciones tempranas crearon
+        # saldos a favor formales aunque todavía no existía saldo mensual para compensar.
+        # Si ese crédito automático sigue intacto, se ajusta o cancela según el cálculo vigente.
+        reason = _advance_credit_reason(payment)
+        credit_candidates = session.exec(
+            select(CreditBalance).where(
+                CreditBalance.household_id == household_id,
+                CreditBalance.owner_member_id == payment.paid_by_member_id,
+                CreditBalance.counterparty_member_id == payment.received_by_member_id,
+            )
+        ).all()
+        payment_marker = f"#{payment.id}"
+        credit_rows = [
+            row
+            for row in credit_candidates
+            if row.reason == reason
+            or (
+                payment_marker in (row.reason or "")
+                and "pago anticipado" in (row.reason or "").lower()
+            )
+        ]
+        for row in credit_rows:
+            if row.status != CreditBalanceStatus.available:
+                continue
+            if round_money(row.remaining_amount) != round_money(row.original_amount):
+                continue
+            if credit <= 0.01:
+                row.remaining_amount = 0
+                row.status = CreditBalanceStatus.cancelled
+                row.updated_at = datetime.now(timezone.utc)
+                session.add(row)
+                changed = True
+            elif round_money(row.original_amount) != credit:
+                row.original_amount = credit
+                row.remaining_amount = credit
+                row.updated_at = datetime.now(timezone.utc)
+                session.add(row)
+                changed = True
+
+    return changed
+
+
+def build_month_summary(month: str, household_id: int, session: Session) -> MonthSummary:
+    members, incomes, expenses, participations, advance_payments = _monthly_summary_inputs(month, household_id, session)
+    allocations = _advance_payment_allocations(month, members, incomes, expenses, participations, advance_payments)
+    advance_payment_views = _advance_payment_views(advance_payments, allocations)
+    summary = calculate_month_summary(month, members, incomes, expenses, participations, advance_payment_views)
     if isinstance(summary, MonthSummary):
         return summary
     return MonthSummary.model_validate(summary)
@@ -760,25 +953,28 @@ def set_month_participation(
     return participation_to_read(member, row, payload.month)
 
 
-@router.post("/income", response_model=IncomeRead)
-def upsert_income(
-    payload: IncomeUpsert,
-    current_member: Member = Depends(get_current_member),
-    session: Session = Depends(get_session),
-):
-    ensure_month_open(session, current_member.household_id, payload.month)
-    ensure_member_in_household(session, current_member.household_id, payload.member_id)
+def _upsert_income_record(
+    session: Session,
+    household_id: int,
+    member_id: int,
+    month: str,
+    amount: float,
+    note: str | None,
+) -> IncomeRead:
+    ensure_month_open(session, household_id, month)
+    ensure_member_in_household(session, household_id, member_id)
     existing = session.exec(
         select(MonthlyIncome).where(
-            MonthlyIncome.household_id == current_member.household_id,
-            MonthlyIncome.member_id == payload.member_id,
-            MonthlyIncome.month == payload.month,
+            MonthlyIncome.household_id == household_id,
+            MonthlyIncome.member_id == member_id,
+            MonthlyIncome.month == month,
         )
     ).first()
 
+    clean_note = note.strip() if isinstance(note, str) else note
     if existing:
-        existing.amount = payload.amount
-        existing.note = payload.note
+        existing.amount = amount
+        existing.note = clean_note
         existing.updated_at = datetime.now(timezone.utc)
         session.add(existing)
         session.commit()
@@ -786,17 +982,49 @@ def upsert_income(
         income = existing
     else:
         income = MonthlyIncome(
-            household_id=current_member.household_id,
-            member_id=payload.member_id,
-            month=payload.month,
-            amount=payload.amount,
-            note=payload.note,
+            household_id=household_id,
+            member_id=member_id,
+            month=month,
+            amount=amount,
+            note=clean_note,
         )
         session.add(income)
         session.commit()
         session.refresh(income)
 
     return IncomeRead(id=income.id or 0, member_id=income.member_id, month=income.month, amount=income.amount, note=income.note)
+
+
+@router.post("/income", response_model=IncomeRead)
+def upsert_income(
+    payload: IncomeUpsert,
+    current_member: Member = Depends(get_current_member),
+    session: Session = Depends(get_session),
+):
+    return _upsert_income_record(
+        session=session,
+        household_id=current_member.household_id,
+        member_id=payload.member_id,
+        month=payload.month,
+        amount=payload.amount,
+        note=payload.note,
+    )
+
+
+@router.post("/income/me", response_model=IncomeRead)
+def upsert_my_income(
+    payload: IncomeSelfUpsert,
+    current_member: Member = Depends(get_current_member),
+    session: Session = Depends(get_session),
+):
+    return _upsert_income_record(
+        session=session,
+        household_id=current_member.household_id,
+        member_id=current_member.id or 0,
+        month=payload.month,
+        amount=payload.amount,
+        note=payload.note or "Ingreso del mes cargado desde Personal.",
+    )
 
 
 @router.get("/income", response_model=list[IncomeRead])
@@ -1016,6 +1244,41 @@ def create_manual_debt(
         reason=payload.reason.strip(),
     )
     session.add(debt)
+    session.commit()
+    session.refresh(debt)
+    return debt_to_read(session, debt)
+
+
+@router.patch("/debts/{debt_id}/increase", response_model=DebtRead)
+def increase_manual_debt(
+    debt_id: int,
+    payload: DebtIncrease,
+    current_member: Member = Depends(get_current_member),
+    session: Session = Depends(get_session),
+):
+    debt = get_debt_for_household(session, current_member.household_id, debt_id)
+    if debt.source != DebtSource.manual:
+        raise HTTPException(status_code=400, detail="Solo se pueden agregar consumos a deudas manuales. Para deudas automáticas conviene crear una deuda nueva agrupada.")
+    if debt.status == DebtStatus.cancelled:
+        raise HTTPException(status_code=400, detail="No se pueden agregar consumos a una deuda cancelada.")
+    current_read = debt_to_read(session, debt)
+    if current_read.status == DebtStatus.paid or current_read.remaining_amount <= 0.01:
+        raise HTTPException(status_code=400, detail="No se agregan consumos a una deuda saldada. Creá una deuda nueva para proteger la trazabilidad.")
+    if current_member.id not in {debt.debtor_member_id, debt.creditor_member_id}:
+        raise HTTPException(status_code=403, detail="Solo integrantes involucrados en la deuda pueden ampliarla.")
+
+    amount = round_money(payload.amount)
+    if amount <= 0.01:
+        raise HTTPException(status_code=400, detail="El monto a agregar debe ser mayor a cero.")
+
+    debt.original_amount = round_money(debt.original_amount + amount)
+    note = payload.reason.strip()
+    if note:
+        separator = "\n\n---\n" if debt.reason.strip() else ""
+        debt.reason = f"{debt.reason.rstrip()}{separator}{note}"
+    debt.updated_at = datetime.now(timezone.utc)
+    session.add(debt)
+    sync_debt_status(session, debt)
     session.commit()
     session.refresh(debt)
     return debt_to_read(session, debt)
@@ -1446,6 +1709,8 @@ def list_monthly_advance_payments(
     current_member: Member = Depends(get_current_member),
     session: Session = Depends(get_session),
 ):
+    if _sync_monthly_advance_allocations(month, current_member.household_id, session):
+        session.commit()
     rows = session.exec(
         select(MonthlyAdvancePayment).where(
             MonthlyAdvancePayment.household_id == current_member.household_id,
@@ -1499,30 +1764,19 @@ def confirm_monthly_advance_payment(
         raise HTTPException(status_code=403, detail="Solo quien recibe el pago puede confirmarlo")
     if payment.status != PaymentStatus.pending:
         raise HTTPException(status_code=409, detail="Este pago anticipado ya fue resuelto")
-    summary = build_month_summary(payment.month, current_member.household_id, session)
-    matching = next((s for s in summary.settlements if s.debtor_member_id == payment.paid_by_member_id and s.creditor_member_id == payment.received_by_member_id), None)
-    remaining_before = matching.amount if matching else 0
-    applied = round_money(min(payment.amount, remaining_before))
-    credit = round_money(max(payment.amount - applied, 0))
+
+    # La confirmación registra el hecho real. La aplicación contra el saldo del mes
+    # se recalcula inmediatamente y cada vez que se consulta el listado, para que un
+    # pago confirmado temprano no quede congelado como aplicado en cero.
     payment.status = PaymentStatus.confirmed
-    payment.applied_amount = applied
-    payment.credit_amount = credit
+    payment.applied_amount = 0
+    payment.credit_amount = 0
     payment.confirmed_by_member_id = current_member.id
     payment.confirmed_at = datetime.now(timezone.utc)
     payment.updated_at = datetime.now(timezone.utc)
     session.add(payment)
-    if credit > 0.01:
-        credit_row = CreditBalance(
-            household_id=current_member.household_id,
-            owner_member_id=payment.paid_by_member_id,
-            counterparty_member_id=payment.received_by_member_id,
-            source_payment_id=None,
-            original_amount=credit,
-            remaining_amount=credit,
-            status=CreditBalanceStatus.available,
-            reason=f"Excedente confirmado del pago anticipado #{payment.id} del período {payment.month}",
-        )
-        session.add(credit_row)
+    session.flush()
+    _sync_monthly_advance_allocations(payment.month, current_member.household_id, session)
     session.commit()
     session.refresh(payment)
     return advance_payment_to_read(payment)
@@ -1557,6 +1811,10 @@ def close_month(
 ):
     ensure_operator(current_member)
     settings = get_period_settings(session, current_member.household_id)
+    active_month, _, _, _ = _active_period(settings)
+    if payload.month != active_month:
+        raise HTTPException(status_code=400, detail="Solo se puede cerrar el mes operativo activo.")
+
     existing = get_month_close(session, current_member.household_id, payload.month)
     if existing:
         raise HTTPException(status_code=409, detail="Este mes ya estaba cerrado. Reabrilo si necesitás corregir algo.")
@@ -1575,11 +1833,12 @@ def close_month(
     )
     session.add(close)
 
-    if payload.advance_to_next:
-        settings.active_month_override = _month_str_add(payload.month, 1)
-        settings.updated_by_member_id = current_member.id
-        settings.updated_at = datetime.now(timezone.utc)
-        session.add(settings)
+    # Regla FASE 14: el mes operativo no cambia por calendario ni queda cerrado activo.
+    # Cerrar el mes activo siempre guarda snapshot y abre el período siguiente vacío.
+    settings.active_month_override = _month_str_add(payload.month, 1)
+    settings.updated_by_member_id = current_member.id
+    settings.updated_at = datetime.now(timezone.utc)
+    session.add(settings)
 
     session.commit()
     session.refresh(close)

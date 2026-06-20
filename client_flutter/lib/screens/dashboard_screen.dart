@@ -380,7 +380,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         const SizedBox(height: 14),
         _taskAlertCard(),
         const SizedBox(height: 14),
-        const SectionTitle(title: 'Participación del mes', subtitle: 'Cada persona aporta según ingresos cargados.', icon: Icons.pie_chart_outline),
+        const SectionTitle(title: 'Participación del mes', subtitle: 'Cada persona aporta según el ingreso que carga desde Personal.', icon: Icons.pie_chart_outline),
         for (final member in s.members) ...[
           _MemberSummaryCard(member: member, money: money),
           const SizedBox(height: 12),
@@ -403,10 +403,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
               width: itemWidth,
               label: 'Ingresos hogar',
               value: money.format(s.totalIncome),
-              hint: 'Cargar',
+              hint: 'Ir a Personal',
               icon: Icons.payments_outlined,
               color: kPrimary,
-              onTap: members.isEmpty ? null : _showIncomeSheet,
+              onTap: () => _openInternal(const PersonalLocalScreen(allowSharedNavigation: true)),
             ),
             _ShortcutMetricCard(
               width: itemWidth,
@@ -530,10 +530,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SectionTitle(title: 'Casa', subtitle: 'Cargar lo común y revisar quién pagó qué.', icon: Icons.home_work_outlined),
+        const SectionTitle(title: 'Casa', subtitle: 'Cargar gastos comunes y revisar el reparto. Los ingresos se cargan desde Personal.', icon: Icons.home_work_outlined),
         _quickActionsCard(),
         const SizedBox(height: 14),
         _participationCard(),
+        const SizedBox(height: 14),
+        _incomeCorrectionCard(),
         const SizedBox(height: 14),
         AppCard(
           child: Column(
@@ -978,6 +980,45 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  Widget _incomeCorrectionCard() {
+    return AppCard(
+      border: Border.all(color: kPrimary.withOpacity(0.10)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionTitle(
+            title: 'Ingresos del hogar',
+            subtitle: 'Carga principal desde Personal; Casa conserva una corrección manual secundaria.',
+            icon: Icons.payments_outlined,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Cada integrante debería cargar su propio ingreso mensual en Personal. Usá esta corrección solo si necesitás ajustar el reparto de alguien desde Casa.',
+            style: TextStyle(color: kMuted, height: 1.3, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              ElevatedButton.icon(
+                onPressed: () => _openInternal(const PersonalLocalScreen(allowSharedNavigation: true)),
+                icon: const Icon(Icons.lock_person_outlined),
+                label: const Text('Cargar mi ingreso en Personal'),
+              ),
+              OutlinedButton.icon(
+                onPressed: members.isEmpty ? null : _showIncomeSheet,
+                icon: const Icon(Icons.edit_outlined),
+                label: const Text('Corrección manual de Casa'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+
   Widget _participationCard() {
     return AppCard(
       child: Column(
@@ -1014,11 +1055,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: [
           const SectionTitle(title: 'Acciones rápidas', subtitle: 'Cargá lo importante sin perderte.', icon: Icons.bolt_rounded),
           SoftActionTile(
-            onTap: members.isEmpty ? null : _showIncomeSheet,
+            onTap: () => _openInternal(const PersonalLocalScreen(allowSharedNavigation: true)),
             icon: Icons.payments_outlined,
             assetIconPath: kBrandPulsoHogar,
-            title: 'Cargar ingresos',
-            subtitle: 'Base del reparto proporcional del mes.',
+            title: 'Cargar mi ingreso en Personal',
+            subtitle: 'Es la fuente principal para calcular tu aporte en Casa.',
           ),
           const SizedBox(height: 10),
           SoftActionTile(
@@ -1262,8 +1303,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      isDismissible: true,
-      enableDrag: true,
+      isDismissible: false,
+      enableDrag: false,
       backgroundColor: Colors.transparent,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => _SheetFrame(
@@ -1368,7 +1409,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<bool> _confirmCopyPreviousIncome(String previousMonth) async {
     final result = await showDialog<bool>(
       context: context,
-      barrierDismissible: true,
+      barrierDismissible: false,
       builder: (context) => AlertDialog(
         title: const Text('Copiar ingresos anteriores'),
         content: Text('Se copiarán los ingresos cargados en $previousMonth al período $month. Después podés editar cada monto antes o después de guardar.'),
@@ -1407,8 +1448,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       await showModalBottomSheet(
         context: context,
         isScrollControlled: true,
-        isDismissible: true,
-        enableDrag: true,
+        isDismissible: false,
+        enableDrag: false,
         backgroundColor: Colors.transparent,
         builder: (_) => StatefulBuilder(
           builder: (context, setModalState) => _SheetFrame(
@@ -1538,8 +1579,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      isDismissible: true,
-      enableDrag: true,
+      isDismissible: false,
+      enableDrag: false,
       backgroundColor: Colors.transparent,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) {
@@ -1672,8 +1713,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return await showModalBottomSheet<bool>(
         context: context,
         isScrollControlled: true,
-        isDismissible: true,
-        enableDrag: true,
+        isDismissible: false,
+        enableDrag: false,
         backgroundColor: Colors.transparent,
         builder: (_) => StatefulBuilder(
           builder: (context, setModalState) => _SheetFrame(
@@ -1840,14 +1881,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  String _newCardImportBatchId() {
+    final stamp = DateTime.now().toIso8601String().replaceAll(RegExp(r'[^0-9]'), '');
+    return 'tarjeta-${month.replaceAll('-', '')}-$stamp';
+  }
+
+  String _cardImportFingerprint(_CardImportDraft draft) {
+    final date = draft.dateController.text.trim();
+    final amount = _importAmountCents(_safeDraftAmount(draft));
+    final description = _normalizeImportText(draft.descriptionController.text);
+    final installments = (draft.installments ?? '').trim();
+    final raw = _normalizeImportText(draft.rawText);
+    final base = '$date|$amount|$description|$installments|$raw';
+    var hash = 2166136261;
+    for (final unit in base.codeUnits) {
+      hash ^= unit;
+      hash = (hash * 16777619) & 0xFFFFFFFF;
+    }
+    return hash.toRadixString(16).padLeft(8, '0');
+  }
+
+  String _cardImportTrace({required String batchId, required int index, required _CardImportDraft draft}) {
+    return 'Lote $batchId · ítem ${index + 1} · huella ${_cardImportFingerprint(draft)}';
+  }
+
   String _destinationLabel(_CardImportDestination destination) {
     switch (destination) {
       case _CardImportDestination.common:
         return 'Gasto común';
       case _CardImportDestination.personal:
         return 'Personal';
-      case _CardImportDestination.debt:
-        return 'Deuda';
+      case _CardImportDestination.cardDebt:
+        return 'Tarjeta / deuda a pagar';
+      case _CardImportDestination.owedToMe:
+        return 'Me deben este consumo';
       case _CardImportDestination.skip:
         return 'No importar';
     }
@@ -1871,21 +1938,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<bool> _confirmImportCardMovements({
     required int commonCount,
     required int personalCount,
-    required int debtCount,
+    required int cardDebtCount,
+    required int owedToMeCount,
     required int skippedCount,
+    required int duplicateCount,
     required double total,
   }) async {
     final parts = <String>[];
     if (commonCount > 0) parts.add('$commonCount gasto${commonCount == 1 ? '' : 's'} común${commonCount == 1 ? '' : 'es'}');
     if (personalCount > 0) parts.add('$personalCount gasto${personalCount == 1 ? '' : 's'} personal${personalCount == 1 ? '' : 'es'}');
-    if (debtCount > 0) parts.add('$debtCount deuda${debtCount == 1 ? '' : 's'} personal${debtCount == 1 ? '' : 'es'}');
+    if (cardDebtCount > 0) parts.add('$cardDebtCount tarjeta/deuda a pagar');
+    if (owedToMeCount > 0) parts.add('$owedToMeCount consumo${owedToMeCount == 1 ? '' : 's'} que te deben');
+    if (duplicateCount > 0) parts.add('$duplicateCount duplicado${duplicateCount == 1 ? '' : 's'} no cargado${duplicateCount == 1 ? '' : 's'}');
     if (skippedCount > 0) parts.add('$skippedCount omitido${skippedCount == 1 ? '' : 's'}');
     final result = await showDialog<bool>(
       context: context,
-      barrierDismissible: true,
+      barrierDismissible: false,
       builder: (context) => AlertDialog(
         title: const Text('Importar resumen de tarjeta'),
-        content: Text('Se procesará: ${parts.join(', ')}. Total seleccionado: ${money.format(total)}. Los gastos comunes irán a Casa; los personales y deudas quedarán solo en Personal local.'),
+        content: Text('Se procesará: ${parts.join(', ')}. Total a cargar: ${money.format(total)}. Los gastos comunes irán a Casa; los personales, tarjeta/deuda y "me deben" quedarán solo en Personal local. Al finalizar se mostrará un resumen por lote.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
           FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Importar')),
@@ -1893,6 +1964,302 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
     );
     return result == true;
+  }
+
+  String _sharedDebtReasonFromCardImport({
+    required List<_CardImportDraft> drafts,
+    required String batchId,
+    required int debtorMemberId,
+    required int creditorMemberId,
+    required String title,
+  }) {
+    final lines = <String>[];
+    var total = 0.0;
+    for (var i = 0; i < drafts.length; i++) {
+      final draft = drafts[i];
+      final description = draft.descriptionController.text.trim().isEmpty ? 'Movimiento sin descripción' : draft.descriptionController.text.trim();
+      final amount = _parseMoneyInput(draft.amountController.text);
+      final date = _parseCardImportDate(draft.dateController.text);
+      total += amount;
+      lines.add('- ${_dateOnly(date)} · $description · ${money.format(amount)} · ${_cardImportTrace(batchId: batchId, index: i, draft: draft)}');
+    }
+    final safeTitle = title.trim().isEmpty
+        ? 'Consumos personales de ${_memberName(debtorMemberId)} en tarjeta de ${_memberName(creditorMemberId)}'
+        : title.trim();
+    final visibleLines = lines.take(30).toList();
+    if (lines.length > visibleLines.length) visibleLines.add('- ... y ${lines.length - visibleLines.length} consumo(s) más.');
+    return [
+      safeTitle,
+      '',
+      'Origen: importado desde resumen de tarjeta.',
+      'Lote: $batchId.',
+      'Deudor: ${_memberName(debtorMemberId)}.',
+      'Acreedor: ${_memberName(creditorMemberId)}.',
+      'Cantidad de consumos: ${drafts.length}.',
+      'Total agrupado: ${money.format(total)}.',
+      '',
+      'Consumos incluidos:',
+      ...visibleLines,
+    ].join('\n');
+  }
+
+  String _debtStatusLabel(String status) {
+    switch (status) {
+      case 'active':
+        return 'activa';
+      case 'partial':
+        return 'parcial';
+      case 'paid':
+        return 'saldada';
+      case 'cancelled':
+        return 'cancelada';
+      default:
+        return status;
+    }
+  }
+
+  String _debtOptionLabel(DebtItem debt) {
+    return '#${debt.id} · ${_memberName(debt.debtorMemberId)} debe a ${_memberName(debt.creditorMemberId)} · pendiente ${money.format(debt.remainingAmount)} · ${_debtStatusLabel(debt.status)}';
+  }
+
+  String _appendExistingDebtReasonFromCardImport({
+    required List<_CardImportDraft> drafts,
+    required String batchId,
+    required DebtItem debt,
+    required String title,
+  }) {
+    final lines = <String>[];
+    var total = 0.0;
+    for (var i = 0; i < drafts.length; i++) {
+      final draft = drafts[i];
+      final description = draft.descriptionController.text.trim().isEmpty ? 'Movimiento sin descripción' : draft.descriptionController.text.trim();
+      final amount = _parseMoneyInput(draft.amountController.text);
+      final date = _parseCardImportDate(draft.dateController.text);
+      total += amount;
+      lines.add('- ${_dateOnly(date)} · $description · ${money.format(amount)} · ${_cardImportTrace(batchId: batchId, index: i, draft: draft)}');
+    }
+    final safeTitle = title.trim().isEmpty ? 'Consumos agregados desde resumen de tarjeta' : title.trim();
+    final visibleLines = lines.take(30).toList();
+    if (lines.length > visibleLines.length) visibleLines.add('- ... y ${lines.length - visibleLines.length} consumo(s) más.');
+    return [
+      'Ajuste: $safeTitle',
+      '',
+      'Origen: consumos agregados desde resumen de tarjeta.',
+      'Lote: $batchId.',
+      'Deuda existente: #${debt.id}.',
+      'Relación: ${_memberName(debt.debtorMemberId)} debe a ${_memberName(debt.creditorMemberId)}.',
+      'Saldo pendiente antes de agregar: ${money.format(debt.remainingAmount)}.',
+      'Cantidad de consumos agregados: ${drafts.length}.',
+      'Total agregado: ${money.format(total)}.',
+      '',
+      'Consumos agregados:',
+      ...visibleLines,
+    ].join('\n');
+  }
+
+  Future<_CardImportExistingDebtDraft?> _confirmAppendExistingDebtFromCardSelection({
+    required List<_CardImportDraft> selectedDrafts,
+    required String batchId,
+    required List<DebtItem> debts,
+  }) async {
+    final compatibleDebts = debts
+        .where((debt) => debt.source == 'manual' && debt.status != 'cancelled' && debt.status != 'paid' && debt.remainingAmount > 0.01)
+        .toList();
+    if (compatibleDebts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No hay deudas manuales activas para agregar consumos. Usá Crear deuda compartida.')));
+      return null;
+    }
+    var selectedDebt = compatibleDebts.first;
+    final total = selectedDrafts.fold<double>(0, (sum, draft) => sum + _safeDraftAmount(draft));
+    final titleController = TextEditingController(text: 'Consumos agregados desde resumen de tarjeta');
+    try {
+      return await showDialog<_CardImportExistingDebtDraft>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text('Agregar a deuda existente'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${selectedDrafts.length} consumo${selectedDrafts.length == 1 ? '' : 's'} seleccionado${selectedDrafts.length == 1 ? '' : 's'} · Total ${money.format(total)}',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<int>(
+                    value: selectedDebt.id,
+                    items: compatibleDebts
+                        .map((debt) => DropdownMenuItem(value: debt.id, child: Text(_debtOptionLabel(debt))))
+                        .toList(),
+                    onChanged: (value) => setDialogState(() {
+                      selectedDebt = compatibleDebts.firstWhere((debt) => debt.id == value, orElse: () => selectedDebt);
+                    }),
+                    decoration: const InputDecoration(labelText: 'Deuda existente compatible'),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: titleController,
+                    decoration: const InputDecoration(labelText: 'Nota del agregado'),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(color: kWarning.withOpacity(0.10), borderRadius: BorderRadius.circular(16)),
+                    child: Text(
+                      'Se aumentará el monto original de la deuda #${selectedDebt.id} en ${money.format(total)} y se agregará una nota con el detalle de consumos. No se modifican abonos ni pagos existentes.',
+                      style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, height: 1.25),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    selectedDrafts.take(6).map((draft) {
+                      final description = draft.descriptionController.text.trim().isEmpty ? 'Movimiento sin descripción' : draft.descriptionController.text.trim();
+                      return '• $description · ${money.format(_safeDraftAmount(draft))}';
+                    }).join('\n'),
+                    style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, height: 1.25),
+                  ),
+                  if (selectedDrafts.length > 6)
+                    Text('• ... y ${selectedDrafts.length - 6} más.', style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+              FilledButton(
+                onPressed: () => Navigator.pop(
+                  context,
+                  _CardImportExistingDebtDraft(
+                    debt: selectedDebt,
+                    title: titleController.text.trim(),
+                  ),
+                ),
+                child: const Text('Agregar a deuda'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } finally {
+      titleController.dispose();
+    }
+  }
+
+  Future<_CardImportSharedDebtDraft?> _confirmSharedDebtFromCardSelection({
+    required List<_CardImportDraft> selectedDrafts,
+    required String batchId,
+  }) async {
+    if (members.length < 2) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Se necesitan al menos dos integrantes para crear una deuda compartida.')));
+      return null;
+    }
+    final currentMemberId = widget.session.member.id;
+    var creditorMemberId = members.any((member) => member.id == currentMemberId) ? currentMemberId : members.first.id;
+    var debtorMemberId = members.firstWhere((member) => member.id != creditorMemberId, orElse: () => members.first).id;
+    if (debtorMemberId == creditorMemberId) {
+      debtorMemberId = members.firstWhere((member) => member.id != creditorMemberId).id;
+    }
+    final total = selectedDrafts.fold<double>(0, (sum, draft) => sum + _safeDraftAmount(draft));
+    final titleController = TextEditingController(text: 'Consumos personales de ${_memberName(debtorMemberId)} en tarjeta de ${_memberName(creditorMemberId)}');
+    try {
+      return await showDialog<_CardImportSharedDebtDraft>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text('Crear deuda compartida'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${selectedDrafts.length} consumo${selectedDrafts.length == 1 ? '' : 's'} seleccionado${selectedDrafts.length == 1 ? '' : 's'} · Total ${money.format(total)}',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<int>(
+                    value: debtorMemberId,
+                    items: members
+                        .where((member) => member.id != creditorMemberId)
+                        .map((member) => DropdownMenuItem(value: member.id, child: Text('${member.name} debe')))
+                        .toList(),
+                    onChanged: (value) => setDialogState(() {
+                      debtorMemberId = value ?? debtorMemberId;
+                      titleController.text = 'Consumos personales de ${_memberName(debtorMemberId)} en tarjeta de ${_memberName(creditorMemberId)}';
+                    }),
+                    decoration: const InputDecoration(labelText: 'Deudor'),
+                  ),
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<int>(
+                    value: creditorMemberId,
+                    items: members
+                        .where((member) => member.id != debtorMemberId)
+                        .map((member) => DropdownMenuItem(value: member.id, child: Text('${member.name} cobra')))
+                        .toList(),
+                    onChanged: (value) => setDialogState(() {
+                      creditorMemberId = value ?? creditorMemberId;
+                      if (debtorMemberId == creditorMemberId) {
+                        debtorMemberId = members.firstWhere((member) => member.id != creditorMemberId).id;
+                      }
+                      titleController.text = 'Consumos personales de ${_memberName(debtorMemberId)} en tarjeta de ${_memberName(creditorMemberId)}';
+                    }),
+                    decoration: const InputDecoration(labelText: 'Acreedor'),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: titleController,
+                    decoration: const InputDecoration(labelText: 'Motivo / título de la deuda'),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(color: kLavender, borderRadius: BorderRadius.circular(16)),
+                    child: Text(
+                      'Se creará una deuda formal compartida. Estos consumos quedarán marcados como enviados a deuda y no se cargarán también como gasto común o personal.',
+                      style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, height: 1.25),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    selectedDrafts.take(6).map((draft) {
+                      final description = draft.descriptionController.text.trim().isEmpty ? 'Movimiento sin descripción' : draft.descriptionController.text.trim();
+                      return '• $description · ${money.format(_safeDraftAmount(draft))}';
+                    }).join('\n'),
+                    style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, height: 1.25),
+                  ),
+                  if (selectedDrafts.length > 6)
+                    Text('• ... y ${selectedDrafts.length - 6} más.', style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+              FilledButton(
+                onPressed: () {
+                  if (debtorMemberId == creditorMemberId) return;
+                  Navigator.pop(
+                    context,
+                    _CardImportSharedDebtDraft(
+                      debtorMemberId: debtorMemberId,
+                      creditorMemberId: creditorMemberId,
+                      title: titleController.text.trim(),
+                    ),
+                  );
+                },
+                child: const Text('Crear deuda'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } finally {
+      titleController.dispose();
+    }
   }
 
   Future<void> _showCardImportPreviewSheet() async {
@@ -1941,56 +2308,196 @@ class _DashboardScreenState extends State<DashboardScreen> {
     var busy = false;
     var sheetMessage = preview.items.isEmpty
         ? 'No se detectaron movimientos importables. Podés probar con otro resumen digital.'
-        : 'Vista previa: elegí destino por movimiento: Casa, Personal, Deuda o No importar. Nada se carga sin confirmación.';
+        : 'Vista previa: elegí destino por movimiento: Casa, Personal mío, Tarjeta/deuda, Me deben o No importar. Nada se carga sin confirmación.';
 
     try {
       await showModalBottomSheet(
         context: context,
         isScrollControlled: true,
-        isDismissible: true,
-        enableDrag: true,
+        isDismissible: false,
+        enableDrag: false,
         backgroundColor: Colors.transparent,
         builder: (_) => StatefulBuilder(
           builder: (context, setModalState) {
-            final selectedDrafts = drafts.where((draft) => draft.selected && draft.destination != _CardImportDestination.skip).toList();
+            final selectedDrafts = drafts.where((draft) => draft.selected && !draft.sentToSharedDebt && draft.destination != _CardImportDestination.skip).toList();
             final selectedTotal = selectedDrafts.fold<double>(0, (sum, draft) => sum + _safeDraftAmount(draft));
             final commonCount = selectedDrafts.where((draft) => draft.destination == _CardImportDestination.common).length;
             final personalCount = selectedDrafts.where((draft) => draft.destination == _CardImportDestination.personal).length;
-            final debtCount = selectedDrafts.where((draft) => draft.destination == _CardImportDestination.debt).length;
-            final skippedCount = drafts.length - selectedDrafts.length;
+            final cardDebtCount = selectedDrafts.where((draft) => draft.destination == _CardImportDestination.cardDebt).length;
+            final owedToMeCount = selectedDrafts.where((draft) => draft.destination == _CardImportDestination.owedToMe).length;
+            final skippedCount = drafts.where((draft) => !draft.selected && !draft.sentToSharedDebt).length;
+            final sharedDebtSentCount = drafts.where((draft) => draft.sentToSharedDebt).length;
+
+            Future<void> createSharedDebtFromSelected() async {
+              final selectedForDebt = drafts.where((draft) => draft.selected && !draft.sentToSharedDebt && draft.destination != _CardImportDestination.skip).toList();
+              if (selectedForDebt.isEmpty) {
+                setModalState(() => sheetMessage = 'Seleccioná los consumos que querés agrupar en una deuda compartida.');
+                return;
+              }
+              try {
+                for (final draft in selectedForDebt) {
+                  _parseMoneyInput(draft.amountController.text);
+                  _parseCardImportDate(draft.dateController.text);
+                }
+                final batchId = _newCardImportBatchId();
+                final debtDraft = await _confirmSharedDebtFromCardSelection(selectedDrafts: selectedForDebt, batchId: batchId);
+                if (debtDraft == null) return;
+                final total = selectedForDebt.fold<double>(0, (sum, draft) => sum + _parseMoneyInput(draft.amountController.text));
+                final reason = _sharedDebtReasonFromCardImport(
+                  drafts: selectedForDebt,
+                  batchId: batchId,
+                  debtorMemberId: debtDraft.debtorMemberId,
+                  creditorMemberId: debtDraft.creditorMemberId,
+                  title: debtDraft.title,
+                );
+                setModalState(() {
+                  busy = true;
+                  sheetMessage = 'Creando deuda compartida del lote $batchId...';
+                });
+                await widget.api.createManualDebt(
+                  debtorMemberId: debtDraft.debtorMemberId,
+                  creditorMemberId: debtDraft.creditorMemberId,
+                  amount: total,
+                  reason: reason,
+                );
+                setModalState(() {
+                  for (final draft in selectedForDebt) {
+                    draft.sentToSharedDebt = true;
+                    draft.selected = false;
+                    draft.destination = _CardImportDestination.skip;
+                  }
+                  sheetMessage = 'Deuda compartida creada: ${_memberName(debtDraft.debtorMemberId)} debe ${money.format(total)} a ${_memberName(debtDraft.creditorMemberId)}. Los consumos quedaron marcados y no se importarán otra vez.';
+                });
+                await _refresh();
+                if (mounted) {
+                  ScaffoldMessenger.of(this.context).showSnackBar(
+                    SnackBar(content: Text('Deuda compartida creada por ${money.format(total)} con ${selectedForDebt.length} consumo(s).')),
+                  );
+                }
+              } on FormatException {
+                setModalState(() => sheetMessage = 'No se pudo crear la deuda: revisá fechas y montos de los consumos seleccionados.');
+              } catch (e) {
+                setModalState(() => sheetMessage = friendlyMessage(e));
+              } finally {
+                if (mounted) setModalState(() => busy = false);
+              }
+            }
+
+            Future<void> appendToExistingDebtFromSelected() async {
+              final selectedForDebt = drafts.where((draft) => draft.selected && !draft.sentToSharedDebt && draft.destination != _CardImportDestination.skip).toList();
+              if (selectedForDebt.isEmpty) {
+                setModalState(() => sheetMessage = 'Seleccioná los consumos que querés agregar a una deuda existente.');
+                return;
+              }
+              try {
+                for (final draft in selectedForDebt) {
+                  _parseMoneyInput(draft.amountController.text);
+                  _parseCardImportDate(draft.dateController.text);
+                }
+                setModalState(() {
+                  busy = true;
+                  sheetMessage = 'Buscando deudas existentes compatibles...';
+                });
+                final debts = await widget.api.getDebts(includeCancelled: false);
+                if (!mounted) return;
+                setModalState(() {
+                  busy = false;
+                  sheetMessage = 'Elegí una deuda existente compatible para agregar los consumos seleccionados.';
+                });
+                final batchId = _newCardImportBatchId();
+                final target = await _confirmAppendExistingDebtFromCardSelection(
+                  selectedDrafts: selectedForDebt,
+                  batchId: batchId,
+                  debts: debts,
+                );
+                if (target == null) return;
+                final total = selectedForDebt.fold<double>(0, (sum, draft) => sum + _parseMoneyInput(draft.amountController.text));
+                final reason = _appendExistingDebtReasonFromCardImport(
+                  drafts: selectedForDebt,
+                  batchId: batchId,
+                  debt: target.debt,
+                  title: target.title,
+                );
+                setModalState(() {
+                  busy = true;
+                  sheetMessage = 'Agregando consumos a deuda #${target.debt.id}...';
+                });
+                await widget.api.increaseDebt(
+                  debtId: target.debt.id,
+                  amount: total,
+                  reason: reason,
+                );
+                setModalState(() {
+                  for (final draft in selectedForDebt) {
+                    draft.sentToSharedDebt = true;
+                    draft.selected = false;
+                    draft.destination = _CardImportDestination.skip;
+                  }
+                  sheetMessage = 'Consumos agregados a deuda #${target.debt.id}: ${money.format(total)}. Quedaron marcados y no se importarán otra vez.';
+                });
+                await _refresh();
+                if (mounted) {
+                  ScaffoldMessenger.of(this.context).showSnackBar(
+                    SnackBar(content: Text('Se agregaron ${selectedForDebt.length} consumo(s) a deuda #${target.debt.id} por ${money.format(total)}.')),
+                  );
+                }
+              } on FormatException {
+                setModalState(() {
+                  busy = false;
+                  sheetMessage = 'No se pudo agregar a deuda existente: revisá fechas y montos de los consumos seleccionados.';
+                });
+              } catch (e) {
+                setModalState(() {
+                  busy = false;
+                  sheetMessage = friendlyMessage(e);
+                });
+              } finally {
+                if (mounted) setModalState(() => busy = false);
+              }
+            }
 
             Future<void> importSelected() async {
               var closedAfterImport = false;
-              final selected = drafts.where((draft) => draft.selected && draft.destination != _CardImportDestination.skip).toList();
+              final selected = drafts.where((draft) => draft.selected && !draft.sentToSharedDebt && draft.destination != _CardImportDestination.skip).toList();
               if (selected.isEmpty) {
                 setModalState(() => sheetMessage = 'Seleccioná al menos un movimiento para importar.');
                 return;
               }
               try {
                 final exactDuplicates = selected.where((draft) => draft.destination == _CardImportDestination.common && _isExactImportDuplicate(draft, existingExpenses)).toList();
-                if (exactDuplicates.isNotEmpty) {
-                  setModalState(() => sheetMessage = 'Hay ${exactDuplicates.length} movimiento${exactDuplicates.length == 1 ? '' : 's'} idéntico${exactDuplicates.length == 1 ? '' : 's'} a gastos comunes ya cargados. Cambiá el destino, desmarcalos o modificá algún dato antes de importar.');
+                final importable = selected.where((draft) => !exactDuplicates.contains(draft)).toList();
+                if (importable.isEmpty) {
+                  setModalState(() => sheetMessage = 'Todos los movimientos seleccionados coinciden con gastos comunes ya cargados. No se importó nada para evitar duplicados.');
                   return;
                 }
-                final total = selected.fold<double>(0, (sum, draft) => sum + _parseMoneyInput(draft.amountController.text));
+                final total = importable.fold<double>(0, (sum, draft) => sum + _parseMoneyInput(draft.amountController.text));
                 final confirmed = await _confirmImportCardMovements(
-                  commonCount: selected.where((draft) => draft.destination == _CardImportDestination.common).length,
-                  personalCount: selected.where((draft) => draft.destination == _CardImportDestination.personal).length,
-                  debtCount: selected.where((draft) => draft.destination == _CardImportDestination.debt).length,
-                  skippedCount: drafts.length - selected.length,
+                  commonCount: importable.where((draft) => draft.destination == _CardImportDestination.common).length,
+                  personalCount: importable.where((draft) => draft.destination == _CardImportDestination.personal).length,
+                  cardDebtCount: importable.where((draft) => draft.destination == _CardImportDestination.cardDebt).length,
+                  owedToMeCount: importable.where((draft) => draft.destination == _CardImportDestination.owedToMe).length,
+                  skippedCount: drafts.where((draft) => !draft.selected && !draft.sentToSharedDebt).length,
+                  duplicateCount: exactDuplicates.length,
                   total: total,
                 );
                 if (!confirmed) return;
+                final batchId = _newCardImportBatchId();
                 setModalState(() {
                   busy = true;
-                  sheetMessage = 'Importando movimientos seleccionados...';
+                  sheetMessage = 'Importando lote $batchId...';
                 });
                 var importedCommon = 0;
                 var importedPersonal = 0;
-                var importedDebt = 0;
+                var importedCardDebt = 0;
+                var importedOwedToMe = 0;
                 final failures = <String>[];
+                final duplicateDetails = exactDuplicates.map((draft) {
+                  final description = draft.descriptionController.text.trim().isEmpty ? 'Movimiento sin descripción' : draft.descriptionController.text.trim();
+                  return '$description: duplicado exacto de un gasto común existente.';
+                }).toList();
                 PersonalAccount? personalAccount;
-                for (final draft in selected) {
+                for (var itemIndex = 0; itemIndex < importable.length; itemIndex++) {
+                  final draft = importable[itemIndex];
                   try {
                     final note = draft.noteController.text.trim();
                     final description = draft.descriptionController.text.trim().isEmpty ? 'Movimiento importado de tarjeta' : draft.descriptionController.text.trim();
@@ -1998,13 +2505,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     final category = draft.categoryController.text.trim().isEmpty ? 'General' : draft.categoryController.text.trim();
                     final date = _parseCardImportDate(draft.dateController.text);
                     final fullDescription = note.isEmpty ? description : '$description · $note';
+                    final trace = _cardImportTrace(batchId: batchId, index: itemIndex, draft: draft);
+                    final tracedDescription = '$fullDescription · $trace';
                     switch (draft.destination) {
                       case _CardImportDestination.common:
                         await widget.api.createExpense(
                           paidByMemberId: draft.paidByMemberId,
                           amount: amount,
                           category: category,
-                          description: fullDescription,
+                          description: tracedDescription,
                           date: date,
                         );
                         importedCommon += 1;
@@ -2016,7 +2525,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           accountId: account.id,
                           amount: amount,
                           category: personalCategory,
-                          description: fullDescription,
+                          description: tracedDescription,
                           date: date,
                           source: 'card_import',
                           sourceMonth: month,
@@ -2024,15 +2533,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         );
                         importedPersonal += 1;
                         break;
-                      case _CardImportDestination.debt:
+                      case _CardImportDestination.cardDebt:
                         await personalStore.createDebt(
-                          title: description,
+                          title: 'Tarjeta a pagar: $description',
                           counterparty: 'Tarjeta',
                           direction: 'i_owe',
                           amount: amount,
-                          note: 'Importado desde resumen de tarjeta. Fecha: ${_dateOnly(date)}. Categoría: $category.${note.isEmpty ? '' : ' Nota: $note'}',
+                          note: 'Importado desde resumen de tarjeta como tarjeta/deuda a pagar. Fecha: ${_dateOnly(date)}. Categoría: $category. $trace.${note.isEmpty ? '' : ' Nota: $note'}',
                         );
-                        importedDebt += 1;
+                        importedCardDebt += 1;
+                        break;
+                      case _CardImportDestination.owedToMe:
+                        final counterparty = members.any((member) => member.id == draft.paidByMemberId) ? _memberName(draft.paidByMemberId) : 'Otra persona';
+                        await personalStore.createDebt(
+                          title: 'Me deben: $description',
+                          counterparty: counterparty,
+                          direction: 'owes_me',
+                          amount: amount,
+                          note: 'Importado desde resumen de tarjeta como consumo que te deben. Fecha: ${_dateOnly(date)}. Categoría: $category. $trace.${note.isEmpty ? '' : ' Nota: $note'}',
+                        );
+                        importedOwedToMe += 1;
                         break;
                       case _CardImportDestination.skip:
                         break;
@@ -2049,28 +2569,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   closedAfterImport = true;
                 }
                 if (mounted) {
-                  final importedTotal = importedCommon + importedPersonal + importedDebt;
+                  final importedTotal = importedCommon + importedPersonal + importedCardDebt + importedOwedToMe;
+                  final omittedCount = drafts.where((draft) => !draft.selected && !draft.sentToSharedDebt).length;
                   final summaryParts = <String>[
                     '$importedCommon comunes',
                     '$importedPersonal personales',
-                    '$importedDebt deudas',
-                    '${drafts.length - selected.length} omitidos',
+                    '$importedCardDebt tarjeta/deuda',
+                    '$importedOwedToMe me deben',
+                    '$omittedCount omitidos',
+                    '${exactDuplicates.length} duplicados no cargados',
+                    '${failures.length} fallidos',
                   ];
-                  final failedText = failures.isEmpty ? '' : ' · ${failures.length} fallidos';
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Importación lista: ${summaryParts.join(' · ')}$failedText.')));
-                  if (failures.isNotEmpty) {
+                  ScaffoldMessenger.of(this.context).showSnackBar(SnackBar(content: Text('Lote $batchId: ${summaryParts.join(' · ')}.')));
+                  if (duplicateDetails.isNotEmpty || failures.isNotEmpty) {
+                    final lines = <String>[
+                      'Lote: $batchId',
+                      'Cargados: $importedTotal de ${importable.length}.',
+                      if (duplicateDetails.isNotEmpty) '',
+                      if (duplicateDetails.isNotEmpty) 'Duplicados no cargados:',
+                      ...duplicateDetails.take(8).map((item) => '• $item'),
+                      if (duplicateDetails.length > 8) '• ... y ${duplicateDetails.length - 8} más.',
+                      if (failures.isNotEmpty) '',
+                      if (failures.isNotEmpty) 'Fallidos:',
+                      ...failures.take(8).map((item) => '• $item'),
+                      if (failures.length > 8) '• ... y ${failures.length - 8} más.',
+                    ];
                     await showDialog<void>(
-                      context: context,
+                      context: this.context,
                       builder: (context) => AlertDialog(
-                        title: const Text('Movimientos no importados'),
-                        content: SingleChildScrollView(
-                          child: Text(failures.take(8).join('\n')),
-                        ),
+                        title: const Text('Resultado del lote de importación'),
+                        content: SingleChildScrollView(child: Text(lines.join('\n'))),
                         actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Entendido'))],
                       ),
                     );
                   } else if (importedTotal == 0) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se importó ningún movimiento.')));
+                    ScaffoldMessenger.of(this.context).showSnackBar(const SnackBar(content: Text('No se importó ningún movimiento.')));
                   }
                 }
               } catch (e) {
@@ -2082,7 +2615,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
             return _SheetFrame(
               title: 'Importar resumen de tarjeta',
-              subtitle: 'Revisá cada candidato y elegí si va a Casa, Personal, Deuda o se omite.',
+              subtitle: 'Revisá cada candidato y elegí si va a Casa, Personal mío, Tarjeta/deuda, Me deben o se omite.',
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -2122,7 +2655,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       children: [
                         Expanded(
                           child: Text(
-                            '${selectedDrafts.length} a importar · ${money.format(selectedTotal)} · Casa $commonCount · Personal $personalCount · Deuda $debtCount · Omitidos $skippedCount',
+                            '${selectedDrafts.length} a importar · ${money.format(selectedTotal)} · Casa $commonCount · Personal $personalCount · Tarjeta/deuda $cardDebtCount · Me deben $owedToMeCount · Deuda compartida $sharedDebtSentCount · Omitidos $skippedCount',
                             style: const TextStyle(color: kInk, fontWeight: FontWeight.w900),
                           ),
                         ),
@@ -2130,12 +2663,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           onPressed: busy
                               ? null
                               : () => setModalState(() {
-                                    final selectAll = drafts.any((draft) => !draft.selected);
-                                    for (final draft in drafts) {
+                                    final selectable = drafts.where((draft) => !draft.sentToSharedDebt).toList();
+                                    final selectAll = selectable.any((draft) => !draft.selected);
+                                    for (final draft in selectable) {
                                       draft.selected = selectAll;
+                                      if (selectAll && draft.destination == _CardImportDestination.skip) {
+                                        draft.destination = _CardImportDestination.common;
+                                      }
                                     }
                                   }),
-                          child: Text(drafts.any((draft) => !draft.selected) ? 'Seleccionar todo' : 'Desmarcar todo'),
+                          child: Text(drafts.where((draft) => !draft.sentToSharedDebt).any((draft) => !draft.selected) ? 'Seleccionar todo' : 'Desmarcar todo'),
                         ),
                       ],
                     ),
@@ -2148,6 +2685,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       _CardImportDraftCard(
                         draft: drafts[i],
                         members: members,
+                        currentMemberId: widget.session.member.id,
                         money: money,
                         enabled: !busy,
                         onChanged: () => setModalState(() {}),
@@ -2157,14 +2695,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ],
                   const SizedBox(height: 12),
                   BigActionButton(
+                    onPressed: busy || selectedDrafts.isEmpty ? null : createSharedDebtFromSelected,
+                    icon: Icons.group_add_outlined,
+                    title: busy ? 'Procesando...' : 'Crear deuda compartida con seleccionados',
+                    subtitle: 'Agrupa los consumos marcados en una deuda formal entre integrantes del hogar.',
+                  ),
+                  const SizedBox(height: 8),
+                  BigActionButton(
+                    onPressed: busy || selectedDrafts.isEmpty ? null : appendToExistingDebtFromSelected,
+                    icon: Icons.playlist_add_outlined,
+                    title: busy ? 'Procesando...' : 'Agregar a deuda existente',
+                    subtitle: 'Suma los consumos marcados a una deuda manual activa sin tocar abonos previos.',
+                  ),
+                  const SizedBox(height: 8),
+                  BigActionButton(
                     onPressed: busy || selectedDrafts.isEmpty ? null : importSelected,
                     icon: Icons.playlist_add_check_circle_outlined,
                     title: busy ? 'Importando...' : 'Importar seleccionados',
-                    subtitle: 'Casa usa gastos comunes. Personal y Deuda quedan guardados solo en este dispositivo.',
+                    subtitle: 'Casa usa gastos comunes. Personal y deudas locales quedan en este dispositivo.',
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Tip: para evitar confusiones, mandá a Personal lo privado, a Deuda lo pendiente de pagar y a Casa solo lo compartido.',
+                    'Tip: si varios consumos pertenecen a otra persona, seleccionalos y creá una deuda compartida nueva, o agregalos a una deuda manual existente. Así no se mezclan con gastos comunes ni personales locales.',
                     style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, height: 1.25),
                   ),
                 ],
@@ -2188,8 +2740,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      isDismissible: true,
-      enableDrag: true,
+      isDismissible: false,
+      enableDrag: false,
       backgroundColor: Colors.transparent,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => _SheetFrame(
@@ -2244,11 +2796,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
 
 
-enum _CardImportDestination { common, personal, debt, skip }
+enum _CardImportDestination { common, personal, cardDebt, owedToMe, skip }
+
+class _CardImportSharedDebtDraft {
+  final int debtorMemberId;
+  final int creditorMemberId;
+  final String title;
+
+  const _CardImportSharedDebtDraft({
+    required this.debtorMemberId,
+    required this.creditorMemberId,
+    required this.title,
+  });
+}
+
+class _CardImportExistingDebtDraft {
+  final DebtItem debt;
+  final String title;
+
+  const _CardImportExistingDebtDraft({
+    required this.debt,
+    required this.title,
+  });
+}
 
 class _CardImportDraft {
   bool selected;
   bool possibleDuplicate;
+  bool sentToSharedDebt;
   int paidByMemberId;
   _CardImportDestination destination;
   final TextEditingController dateController;
@@ -2264,6 +2839,7 @@ class _CardImportDraft {
   _CardImportDraft({
     required this.selected,
     required this.possibleDuplicate,
+    this.sentToSharedDebt = false,
     required this.paidByMemberId,
     required this.destination,
     required this.dateController,
@@ -2307,6 +2883,7 @@ class _CardImportDraft {
 class _CardImportDraftCard extends StatelessWidget {
   final _CardImportDraft draft;
   final List<Member> members;
+  final int currentMemberId;
   final NumberFormat money;
   final bool enabled;
   final VoidCallback onChanged;
@@ -2315,6 +2892,7 @@ class _CardImportDraftCard extends StatelessWidget {
   const _CardImportDraftCard({
     required this.draft,
     required this.members,
+    required this.currentMemberId,
     required this.money,
     required this.enabled,
     required this.onChanged,
@@ -2327,8 +2905,10 @@ class _CardImportDraftCard extends StatelessWidget {
         return 'Gasto común';
       case _CardImportDestination.personal:
         return 'Personal';
-      case _CardImportDestination.debt:
-        return 'Deuda';
+      case _CardImportDestination.cardDebt:
+        return 'Tarjeta / deuda a pagar';
+      case _CardImportDestination.owedToMe:
+        return 'Me deben este consumo';
       case _CardImportDestination.skip:
         return 'No importar';
     }
@@ -2337,6 +2917,7 @@ class _CardImportDraftCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final amount = double.tryParse(draft.amountController.text.trim().replaceAll('.', '').replaceAll(',', '.')) ?? 0;
+    final cardEnabled = enabled && !draft.sentToSharedDebt;
     return AppCard(
       padding: const EdgeInsets.all(14),
       color: draft.selected ? Colors.white.withOpacity(0.94) : Colors.white.withOpacity(0.62),
@@ -2349,7 +2930,7 @@ class _CardImportDraftCard extends StatelessWidget {
             children: [
               Checkbox(
                 value: draft.selected,
-                onChanged: enabled
+                onChanged: cardEnabled
                     ? (value) {
                         draft.selected = value ?? false;
                         if (draft.selected && draft.destination == _CardImportDestination.skip) {
@@ -2380,11 +2961,23 @@ class _CardImportDraftCard extends StatelessWidget {
               ),
               IconButton(
                 tooltip: 'Descartar movimiento',
-                onPressed: enabled ? onDiscard : null,
+                onPressed: cardEnabled ? onDiscard : null,
                 icon: const Icon(Icons.delete_outline, color: kDanger),
               ),
             ],
           ),
+          if (draft.sentToSharedDebt) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: kSuccess.withOpacity(0.10), borderRadius: BorderRadius.circular(16)),
+              child: const Text(
+                'Enviado a deuda compartida agrupada. No se volverá a importar como gasto común, personal ni deuda local.',
+                style: TextStyle(color: kMuted, fontWeight: FontWeight.w800, height: 1.25),
+              ),
+            ),
+          ],
           if (draft.possibleDuplicate) ...[
             const SizedBox(height: 8),
             Container(
@@ -2415,9 +3008,13 @@ class _CardImportDraftCard extends StatelessWidget {
             items: _CardImportDestination.values
                 .map((destination) => DropdownMenuItem(value: destination, child: Text(_destinationLabel(destination))))
                 .toList(),
-            onChanged: enabled
+            onChanged: cardEnabled
                 ? (value) {
                     draft.destination = value ?? draft.destination;
+                    if (draft.destination == _CardImportDestination.owedToMe && draft.paidByMemberId == currentMemberId) {
+                      final otherMembers = members.where((member) => member.id != currentMemberId).toList();
+                      if (otherMembers.isNotEmpty) draft.paidByMemberId = otherMembers.first.id;
+                    }
                     draft.selected = draft.destination != _CardImportDestination.skip;
                     onChanged();
                   }
@@ -2426,7 +3023,7 @@ class _CardImportDraftCard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           TextField(
-            enabled: enabled && draft.selected && draft.destination != _CardImportDestination.skip,
+            enabled: cardEnabled && draft.selected && draft.destination != _CardImportDestination.skip,
             controller: draft.descriptionController,
             onChanged: (_) => onChanged(),
             decoration: const InputDecoration(labelText: 'Descripción'),
@@ -2436,7 +3033,7 @@ class _CardImportDraftCard extends StatelessWidget {
             children: [
               Expanded(
                 child: TextField(
-                  enabled: enabled && draft.selected && draft.destination != _CardImportDestination.skip,
+                  enabled: cardEnabled && draft.selected && draft.destination != _CardImportDestination.skip,
                   controller: draft.dateController,
                   onChanged: (_) => onChanged(),
                   decoration: const InputDecoration(labelText: 'Fecha'),
@@ -2445,7 +3042,7 @@ class _CardImportDraftCard extends StatelessWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: TextField(
-                  enabled: enabled && draft.selected && draft.destination != _CardImportDestination.skip,
+                  enabled: cardEnabled && draft.selected && draft.destination != _CardImportDestination.skip,
                   controller: draft.amountController,
                   onChanged: (_) => onChanged(),
                   keyboardType: TextInputType.number,
@@ -2457,7 +3054,7 @@ class _CardImportDraftCard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           TextField(
-            enabled: enabled && draft.selected && draft.destination != _CardImportDestination.skip,
+            enabled: cardEnabled && draft.selected && draft.destination != _CardImportDestination.skip,
             controller: draft.categoryController,
             onChanged: (_) => onChanged(),
             decoration: const InputDecoration(labelText: 'Categoría'),
@@ -2465,18 +3062,32 @@ class _CardImportDraftCard extends StatelessWidget {
           const SizedBox(height: 10),
           DropdownButtonFormField<int>(
             value: members.any((member) => member.id == draft.paidByMemberId) ? draft.paidByMemberId : members.first.id,
-            items: members.map((member) => DropdownMenuItem(value: member.id, child: Text('Pagó ${member.name}'))).toList(),
-            onChanged: enabled && draft.selected && draft.destination == _CardImportDestination.common
+            items: members
+                .map((member) => DropdownMenuItem(
+                      value: member.id,
+                      child: Text(draft.destination == _CardImportDestination.owedToMe ? 'Debe ${member.name}' : 'Pagó ${member.name}'),
+                    ))
+                .toList(),
+            onChanged: cardEnabled &&
+                    draft.selected &&
+                    (draft.destination == _CardImportDestination.common || draft.destination == _CardImportDestination.owedToMe)
                 ? (value) {
                     draft.paidByMemberId = value ?? draft.paidByMemberId;
                     onChanged();
                   }
                 : null,
-            decoration: const InputDecoration(labelText: 'Quién pagó gasto común'),
+            decoration: InputDecoration(
+              labelText: draft.destination == _CardImportDestination.owedToMe ? 'Quién te debe este consumo' : 'Quién pagó gasto común',
+              helperText: draft.destination == _CardImportDestination.common
+                  ? 'Solo se usa para gastos comunes de Casa.'
+                  : draft.destination == _CardImportDestination.owedToMe
+                      ? 'Se guardará como deuda a favor tuyo.'
+                      : 'No aplica para este destino.',
+            ),
           ),
           const SizedBox(height: 10),
           TextField(
-            enabled: enabled && draft.selected && draft.destination != _CardImportDestination.skip,
+            enabled: cardEnabled && draft.selected && draft.destination != _CardImportDestination.skip,
             controller: draft.noteController,
             onChanged: (_) => onChanged(),
             decoration: const InputDecoration(labelText: 'Nota interna'),
@@ -2677,7 +3288,17 @@ class _SheetFrame extends StatelessWidget {
               child: Container(width: 48, height: 5, decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(99))),
             ),
             const SizedBox(height: 16),
-            Text(title, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900)),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: Text(title, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900))),
+                IconButton(
+                  tooltip: 'Cerrar',
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
             const SizedBox(height: 4),
             Text(subtitle, style: const TextStyle(color: Colors.black54, height: 1.3)),
             const SizedBox(height: 16),
@@ -2700,6 +3321,8 @@ class _MemberSummaryCard extends StatelessWidget {
     final percent = (member.incomeShare * 100).toStringAsFixed(1);
     final balanceText = member.balance >= 0 ? 'Debe recibir ${money.format(member.balance)}' : 'Debe pagar ${money.format(member.balance.abs())}';
     final balanceColor = member.balance >= 0 ? kSuccess : kWarning;
+    final incomeLabel = member.income <= 0 ? 'falta cargar' : money.format(member.income);
+    final missingIncome = member.participates && member.income <= 0;
     return AppCard(
       child: Row(
         children: [
@@ -2714,7 +3337,12 @@ class _MemberSummaryCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(member.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
-                Text(member.participates ? '$percent% del ingreso · pagó ${money.format(member.actuallyPaid)}' : 'No participa este mes · pagó ${money.format(member.actuallyPaid)}', style: const TextStyle(color: Colors.black54)),
+                Text(
+                  member.participates
+                      ? 'Ingreso declarado: $incomeLabel · $percent% del ingreso · pagó ${money.format(member.actuallyPaid)}'
+                      : 'No participa este mes · pagó ${money.format(member.actuallyPaid)}',
+                  style: TextStyle(color: missingIncome ? kWarning : Colors.black54, fontWeight: missingIncome ? FontWeight.w800 : FontWeight.normal),
+                ),
                 const SizedBox(height: 6),
                 Text(balanceText, style: TextStyle(fontWeight: FontWeight.w900, color: balanceColor)),
               ],

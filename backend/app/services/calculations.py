@@ -53,18 +53,21 @@ def calculate_month_summary(
         if expense.paid_by_member_id in paid_by_member:
             paid_by_member[expense.paid_by_member_id] += expense.amount
 
-    # Los pagos anticipados confirmados contra el saldo del período reducen el saldo vivo:
-    # quien paga suma como si hubiera cubierto más; quien recibe resta porque ya cobró parte de su crédito.
+    # Los pagos anticipados confirmados compensan el saldo vivo del período,
+    # pero no son gastos comunes pagados. Por eso se registran como ajuste
+    # separado: mantienen "pagaste en gastos comunes" limpio y corrigen
+    # únicamente el saldo/deuda provisoria.
+    advance_adjustment_by_member = {m.id: 0.0 for m in active_members}
     for payment in (advance_payments or []):
         paid_by = getattr(payment, "paid_by_member_id", None)
         received_by = getattr(payment, "received_by_member_id", None)
         applied = round_money(getattr(payment, "applied_amount", 0) or 0)
         if applied <= 0:
             continue
-        if paid_by in paid_by_member:
-            paid_by_member[paid_by] += applied
-        if received_by in paid_by_member:
-            paid_by_member[received_by] -= applied
+        if paid_by in advance_adjustment_by_member:
+            advance_adjustment_by_member[paid_by] += applied
+        if received_by in advance_adjustment_by_member:
+            advance_adjustment_by_member[received_by] -= applied
 
     participating_members = [m for m in active_members if participation.get(m.id or 0, True)]
     total_income = sum(income_by_member.get(m.id, 0.0) for m in participating_members)
@@ -81,6 +84,7 @@ def calculate_month_summary(
         for member in active_members:
             member_id = member.id or 0
             paid = paid_by_member.get(member_id, 0.0)
+            advance_adjustment = advance_adjustment_by_member.get(member_id, 0.0)
             summaries.append(
                 SummaryMember(
                     member_id=member_id,
@@ -90,7 +94,7 @@ def calculate_month_summary(
                     income_share=0,
                     should_pay=0,
                     actually_paid=round_money(paid),
-                    balance=round_money(paid),
+                    balance=round_money(paid + advance_adjustment),
                     participates=participation.get(member_id, True),
                 )
             )
@@ -110,7 +114,8 @@ def calculate_month_summary(
         share = income / total_income if participates and total_income else 0
         should_pay = total_shared * share if participates else 0
         actually_paid = paid_by_member.get(member_id, 0.0)
-        balance = actually_paid - should_pay
+        advance_adjustment = advance_adjustment_by_member.get(member_id, 0.0)
+        balance = actually_paid - should_pay + advance_adjustment
         summaries.append(
             SummaryMember(
                 member_id=member_id,

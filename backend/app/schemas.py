@@ -82,6 +82,12 @@ class IncomeUpsert(BaseModel):
     note: str | None = None
 
 
+class IncomeSelfUpsert(BaseModel):
+    month: str = Field(pattern=r"^\d{4}-\d{2}$")
+    amount: float = Field(ge=0)
+    note: str | None = None
+
+
 class IncomeRead(BaseModel):
     id: int
     member_id: int
@@ -192,6 +198,11 @@ class DebtCreate(BaseModel):
     debtor_member_id: int
     creditor_member_id: int
     original_amount: float = Field(gt=0)
+    reason: str = ""
+
+
+class DebtIncrease(BaseModel):
+    amount: float = Field(gt=0)
     reason: str = ""
 
 
@@ -311,7 +322,9 @@ class DebtCancel(BaseModel):
 
 class MonthCloseCreate(BaseModel):
     month: str = Field(pattern=r"^\d{4}-\d{2}$")
-    advance_to_next: bool = False
+    # Campo conservado por compatibilidad con clientes previos.
+    # Desde FASE 14 el cierre del mes activo siempre avanza al período siguiente.
+    advance_to_next: bool = True
 
 
 class MonthReopen(BaseModel):
