@@ -180,6 +180,7 @@ class CreditBalance(SQLModel, table=True):
     source_payment_id: int | None = Field(default=None, foreign_key="debtpayment.id", index=True)
     original_amount: float = Field(gt=0)
     remaining_amount: float = Field(ge=0)
+    source_advance_payment_id: int | None = Field(default=None, foreign_key="monthlyadvancepayment.id", index=True)
     status: CreditBalanceStatus = Field(default=CreditBalanceStatus.available, index=True)
     reason: str = ""
     created_at: datetime = Field(default_factory=utc_now)

@@ -27,7 +27,8 @@ class DebtsScreen extends StatefulWidget {
 }
 
 class _DebtsScreenState extends State<DebtsScreen> {
-  final money = NumberFormat.currency(locale: 'es_AR', symbol: r'$ ', decimalDigits: 0);
+  final money =
+      NumberFormat.currency(locale: 'es_AR', symbol: r'$ ', decimalDigits: 0);
   bool loading = true;
   bool includeCancelled = false;
   String? error;
@@ -46,8 +47,10 @@ class _DebtsScreenState extends State<DebtsScreen> {
       error = null;
     });
     try {
-      final loaded = await widget.api.getDebts(includeCancelled: includeCancelled);
-      final loadedCredits = await widget.api.getCreditBalances(activeOnly: true);
+      final loaded =
+          await widget.api.getDebts(includeCancelled: includeCancelled);
+      final loadedCredits =
+          await widget.api.getCreditBalances(activeOnly: true);
       setState(() {
         debts = loaded;
         credits = loadedCredits;
@@ -65,10 +68,61 @@ class _DebtsScreenState extends State<DebtsScreen> {
       await _refresh();
       if (widget.onChanged != null) await widget.onChanged!();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ajuste automático registrado como deuda.')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Ajuste automático registrado como deuda.')));
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+    }
+  }
+
+  bool get _canOperate {
+    return widget.members.any(
+      (member) =>
+          member.id == widget.currentMemberId &&
+          (member.role == 'owner' || member.role == 'admin'),
+    );
+  }
+
+  Future<void> _reconcilePreviousCredits() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Revisar saldos anteriores'),
+        content: const Text(
+          'Se revisar\u00e1n pagos anticipados confirmados y se crear\u00e1n \u00fanicamente los saldos a favor que falten. No se modifica un cr\u00e9dito que ya fue usado.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancelar')),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Revisar')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      final result = await widget.api.reconcileAdvanceCredits();
+      await _refresh();
+      if (widget.onChanged != null) await widget.onChanged!();
+      if (!mounted) return;
+      final changed = result['changed'] == true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(changed
+              ? 'Saldos anteriores revisados y reparados.'
+              : 'La revisi\u00f3n termin\u00f3: no hab\u00eda saldos pendientes de reparar.'),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+      }
     }
   }
 
@@ -77,14 +131,21 @@ class _DebtsScreenState extends State<DebtsScreen> {
     final activeTotal = debts
         .where((d) => d.status == 'active' || d.status == 'partial')
         .fold<double>(0, (sum, debt) => sum + debt.remainingAmount);
-    final pendingTotal = debts.fold<double>(0, (sum, debt) => sum + debt.pendingAmount);
-    final myCredits = credits.where((c) => c.ownerMemberId == widget.currentMemberId && c.remainingAmount > 0.01).toList();
+    final pendingTotal =
+        debts.fold<double>(0, (sum, debt) => sum + debt.pendingAmount);
+    final myCredits = credits
+        .where((c) =>
+            c.ownerMemberId == widget.currentMemberId &&
+            c.remainingAmount > 0.01)
+        .toList();
 
     return Scaffold(
       extendBody: true,
       appBar: AppBar(
         title: const Text('Deudas y abonos'),
-        actions: [IconButton(onPressed: _refresh, icon: const Icon(Icons.refresh))],
+        actions: [
+          IconButton(onPressed: _refresh, icon: const Icon(Icons.refresh))
+        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: widget.members.length < 2 ? null : _showCreateDebtSheet,
@@ -98,32 +159,58 @@ class _DebtsScreenState extends State<DebtsScreen> {
             padding: const EdgeInsets.fromLTRB(18, 18, 18, 96),
             children: [
               AppCard(
-                gradient: const LinearGradient(colors: [Color(0xFF6D28D9), Color(0xFF4C1D95)]),
+                gradient: const LinearGradient(
+                    colors: [Color(0xFF6D28D9), Color(0xFF4C1D95)]),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Acuerdos entre integrantes', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.white)),
+                    const Text('Acuerdos entre integrantes',
+                        style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.white)),
                     const SizedBox(height: 8),
                     Text(
                       'Los abonos quedan pendientes hasta que la persona que recibe confirme. Si se paga de más, se genera saldo a favor.',
-                      style: TextStyle(color: Colors.white.withOpacity(0.86), height: 1.25),
+                      style: TextStyle(
+                          color: Colors.white.withOpacity(0.86), height: 1.25),
                     ),
                     const SizedBox(height: 16),
                     Wrap(
                       spacing: 10,
                       runSpacing: 10,
                       children: [
-                        _MiniStat(label: 'Pendiente activo', value: money.format(activeTotal), icon: Icons.payments_outlined),
-                        _MiniStat(label: 'Por confirmar', value: money.format(pendingTotal), icon: Icons.hourglass_top_rounded),
-                        _MiniStat(label: 'Mi saldo a favor', value: money.format(myCredits.fold<double>(0, (s, c) => s + c.remainingAmount)), icon: Icons.savings_outlined),
+                        _MiniStat(
+                            label: 'Pendiente activo',
+                            value: money.format(activeTotal),
+                            icon: Icons.payments_outlined),
+                        _MiniStat(
+                            label: 'Por confirmar',
+                            value: money.format(pendingTotal),
+                            icon: Icons.hourglass_top_rounded),
+                        _MiniStat(
+                            label: 'Mi saldo a favor',
+                            value: money.format(myCredits.fold<double>(
+                                0, (s, c) => s + c.remainingAmount)),
+                            icon: Icons.savings_outlined),
                       ],
                     ),
                     const SizedBox(height: 14),
                     ElevatedButton.icon(
                       onPressed: _generateAutomaticDebt,
                       icon: const Icon(Icons.auto_awesome_outlined),
-                      label: Text('Registrar ajuste proporcional de ${widget.month}'),
+                      label: Text(
+                          'Registrar ajuste proporcional de ${widget.month}'),
                     ),
+                    if (_canOperate)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: OutlinedButton.icon(
+                          onPressed: _reconcilePreviousCredits,
+                          icon: const Icon(Icons.history_rounded),
+                          label: const Text('Revisar saldos anteriores'),
+                        ),
+                      ),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       value: includeCancelled,
@@ -131,24 +218,37 @@ class _DebtsScreenState extends State<DebtsScreen> {
                         setState(() => includeCancelled = value);
                         await _refresh();
                       },
-                      title: const Text('Mostrar deudas canceladas', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
-                      subtitle: Text('Las deudas saldadas o canceladas quedan en historial.', style: TextStyle(color: Colors.white.withOpacity(0.72))),
+                      title: const Text('Mostrar deudas canceladas',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800)),
+                      subtitle: Text(
+                          'Las deudas saldadas o canceladas quedan en historial.',
+                          style:
+                              TextStyle(color: Colors.white.withOpacity(0.72))),
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 14),
               if (myCredits.isNotEmpty) ...[
-                const SectionTitle(title: 'Saldos a favor', subtitle: 'Créditos confirmados que podés conservar o aplicar a deudas compatibles.', icon: Icons.savings_outlined),
+                const SectionTitle(
+                    title: 'Saldos a favor',
+                    subtitle:
+                        'Créditos confirmados que podés conservar o aplicar a deudas compatibles.',
+                    icon: Icons.savings_outlined),
                 for (final credit in myCredits) ...[
                   Builder(
                     builder: (context) {
                       final eligibleDebts = _eligibleDebtsForCredit(credit);
                       return _CreditBalanceCard(
-                        title: '${money.format(credit.remainingAmount)} a favor con ${_memberName(credit.counterpartyMemberId)}',
+                        title:
+                            '${money.format(credit.remainingAmount)} a favor con ${_memberName(credit.counterpartyMemberId)}',
                         reason: credit.reason,
                         compatibleDebtCount: eligibleDebts.length,
-                        onApply: eligibleDebts.isEmpty ? null : () => _showApplyCreditSheet(credit),
+                        onApply: eligibleDebts.isEmpty
+                            ? null
+                            : () => _showApplyCreditSheet(credit),
                       );
                     },
                   ),
@@ -156,9 +256,17 @@ class _DebtsScreenState extends State<DebtsScreen> {
                 ],
               ],
               if (error != null) FriendlyError(message: error!),
-              if (loading) const Center(child: Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator())),
+              if (loading)
+                const Center(
+                    child: Padding(
+                        padding: EdgeInsets.all(40),
+                        child: CircularProgressIndicator())),
               if (!loading && debts.isEmpty)
-                const EmptyState(icon: Icons.handshake_outlined, title: 'Sin deudas registradas', message: 'Podés crear una deuda manual o registrar el ajuste proporcional del mes.'),
+                const EmptyState(
+                    icon: Icons.handshake_outlined,
+                    title: 'Sin deudas registradas',
+                    message:
+                        'Podés crear una deuda manual o registrar el ajuste proporcional del mes.'),
               for (final debt in debts) ...[
                 _DebtCard(
                   debt: debt,
@@ -167,7 +275,11 @@ class _DebtsScreenState extends State<DebtsScreen> {
                   currentMemberId: widget.currentMemberId,
                   onPay: _canPay(debt) ? () => _showPaymentSheet(debt) : null,
                   onPayments: () => _showPayments(debt),
-                  onCancel: debt.status == 'active' && debt.paidAmount <= 0.01 && debt.pendingAmount <= 0.01 ? () => _cancelDebt(debt) : null,
+                  onCancel: debt.status == 'active' &&
+                          debt.paidAmount <= 0.01 &&
+                          debt.pendingAmount <= 0.01
+                      ? () => _cancelDebt(debt)
+                      : null,
                 ),
                 const SizedBox(height: 12),
               ],
@@ -189,14 +301,22 @@ class _DebtsScreenState extends State<DebtsScreen> {
   }
 
   bool _canPay(DebtItem debt) {
-    return (debt.status == 'active' || debt.status == 'partial') && debt.remainingAmount > 0.01 && debt.debtorMemberId == widget.currentMemberId;
+    return (debt.status == 'active' || debt.status == 'partial') &&
+        debt.remainingAmount > 0.01 &&
+        debt.debtorMemberId == widget.currentMemberId;
   }
 
   String _memberName(int id) {
     return widget.members
         .firstWhere(
           (m) => m.id == id,
-          orElse: () => Member(id: id, householdId: 0, name: 'Integrante $id', color: '#000000', role: 'member', isActive: true),
+          orElse: () => Member(
+              id: id,
+              householdId: 0,
+              name: 'Integrante $id',
+              color: '#000000',
+              role: 'member',
+              isActive: true),
         )
         .name;
   }
@@ -210,7 +330,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
 
   Future<void> _showCreateDebtSheet() async {
     Member debtor = widget.members.first;
-    Member creditor = widget.members.length > 1 ? widget.members[1] : widget.members.first;
+    Member creditor =
+        widget.members.length > 1 ? widget.members[1] : widget.members.first;
     final amountController = TextEditingController();
     final reasonController = TextEditingController();
 
@@ -221,32 +342,52 @@ class _DebtsScreenState extends State<DebtsScreen> {
       enableDrag: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => Padding(
-          padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
+          padding: EdgeInsets.only(
+              left: 18,
+              right: 18,
+              top: 18,
+              bottom: MediaQuery.of(context).viewInsets.bottom + 18),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Nueva deuda manual', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              const Text('Nueva deuda manual',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
               const SizedBox(height: 14),
               DropdownButtonFormField<Member>(
                 value: debtor,
-                items: widget.members.map((m) => DropdownMenuItem(value: m, child: Text('Debe ${m.name}'))).toList(),
-                onChanged: (value) => setModalState(() => debtor = value ?? debtor),
+                items: widget.members
+                    .map((m) => DropdownMenuItem(
+                        value: m, child: Text('Debe ${m.name}')))
+                    .toList(),
+                onChanged: (value) =>
+                    setModalState(() => debtor = value ?? debtor),
                 decoration: const InputDecoration(labelText: 'Deudor'),
               ),
               const SizedBox(height: 10),
               DropdownButtonFormField<Member>(
                 value: creditor,
-                items: widget.members.map((m) => DropdownMenuItem(value: m, child: Text('A ${m.name}'))).toList(),
-                onChanged: (value) => setModalState(() => creditor = value ?? creditor),
+                items: widget.members
+                    .map((m) =>
+                        DropdownMenuItem(value: m, child: Text('A ${m.name}')))
+                    .toList(),
+                onChanged: (value) =>
+                    setModalState(() => creditor = value ?? creditor),
                 decoration: const InputDecoration(labelText: 'Acreedor'),
               ),
               const SizedBox(height: 10),
-              TextField(controller: amountController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Monto')), 
+              TextField(
+                  controller: amountController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Monto')),
               const SizedBox(height: 10),
-              TextField(controller: reasonController, decoration: const InputDecoration(labelText: 'Motivo')), 
+              TextField(
+                  controller: reasonController,
+                  decoration: const InputDecoration(labelText: 'Motivo')),
               const SizedBox(height: 16),
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+              TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancelar')),
               const SizedBox(height: 8),
               ElevatedButton(
                 onPressed: () async {
@@ -261,7 +402,9 @@ class _DebtsScreenState extends State<DebtsScreen> {
                     await _refresh();
                     if (widget.onChanged != null) await widget.onChanged!();
                   } catch (e) {
-                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+                    if (mounted)
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(friendlyMessage(e))));
                   }
                 },
                 child: const Text('Guardar deuda'),
@@ -274,7 +417,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
   }
 
   Future<void> _showPaymentSheet(DebtItem debt) async {
-    final amountController = TextEditingController(text: debt.remainingAmount.toStringAsFixed(0));
+    final amountController =
+        TextEditingController(text: debt.remainingAmount.toStringAsFixed(0));
     final noteController = TextEditingController();
     await showModalBottomSheet(
       context: context,
@@ -282,22 +426,38 @@ class _DebtsScreenState extends State<DebtsScreen> {
       isDismissible: false,
       enableDrag: false,
       builder: (_) => Padding(
-        padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
+        padding: EdgeInsets.only(
+            left: 18,
+            right: 18,
+            top: 18,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 18),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Registrar abono a ${_memberName(debt.creditorMemberId)}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+            Text('Registrar abono a ${_memberName(debt.creditorMemberId)}',
+                style:
+                    const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             Text('Saldo pendiente: ${money.format(debt.remainingAmount)}'),
             const SizedBox(height: 6),
-            const Text('Quedará pendiente hasta que la otra persona confirme. Si abonás de más, el excedente será saldo a favor.', style: TextStyle(color: Colors.black54)),
+            const Text(
+                'Quedará pendiente hasta que la otra persona confirme. Si abonás de más, el excedente será saldo a favor.',
+                style: TextStyle(color: Colors.black54)),
             const SizedBox(height: 14),
-            TextField(controller: amountController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Monto transferido/abonado')),
+            TextField(
+                controller: amountController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                    labelText: 'Monto transferido/abonado')),
             const SizedBox(height: 10),
-            TextField(controller: noteController, decoration: const InputDecoration(labelText: 'Nota opcional')), 
+            TextField(
+                controller: noteController,
+                decoration: const InputDecoration(labelText: 'Nota opcional')),
             const SizedBox(height: 16),
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancelar')),
             const SizedBox(height: 8),
             ElevatedButton(
               onPressed: () async {
@@ -311,9 +471,14 @@ class _DebtsScreenState extends State<DebtsScreen> {
                   if (mounted) Navigator.pop(context);
                   await _refresh();
                   if (widget.onChanged != null) await widget.onChanged!();
-                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Abono registrado. Falta confirmación del receptor.')));
+                  if (mounted)
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                        content: Text(
+                            'Abono registrado. Falta confirmación del receptor.')));
                 } catch (e) {
-                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+                  if (mounted)
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(friendlyMessage(e))));
                 }
               },
               child: const Text('Registrar abono pendiente'),
@@ -340,38 +505,52 @@ class _DebtsScreenState extends State<DebtsScreen> {
             controller: controller,
             padding: const EdgeInsets.all(18),
             children: [
-              const Text('Abonos y confirmaciones', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              const Text('Abonos y confirmaciones',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
-              const Text('Los abonos pendientes no descuentan deuda hasta que quien recibe confirme.', style: TextStyle(color: Colors.black54)),
+              const Text(
+                  'Los abonos pendientes no descuentan deuda hasta que quien recibe confirme.',
+                  style: TextStyle(color: Colors.black54)),
               const SizedBox(height: 12),
-              if (payments.isEmpty) const Text('Esta deuda todavía no tiene abonos.'),
-              for (final payment in payments) _PaymentTile(
-                payment: payment,
-                money: money,
-                memberName: _memberName,
-                canConfirm: payment.status == 'pending' && widget.currentMemberId == debt.creditorMemberId,
-                canReject: payment.status == 'pending' && widget.currentMemberId == debt.creditorMemberId,
-                onConfirm: () => _confirmPayment(debt, payment),
-                onReject: () => _rejectPayment(debt, payment),
-              ),
+              if (payments.isEmpty)
+                const Text('Esta deuda todavía no tiene abonos.'),
+              for (final payment in payments)
+                _PaymentTile(
+                  payment: payment,
+                  money: money,
+                  memberName: _memberName,
+                  canConfirm: payment.status == 'pending' &&
+                      widget.currentMemberId == debt.creditorMemberId,
+                  canReject: payment.status == 'pending' &&
+                      widget.currentMemberId == debt.creditorMemberId,
+                  onConfirm: () => _confirmPayment(debt, payment),
+                  onReject: () => _rejectPayment(debt, payment),
+                ),
             ],
           ),
         ),
       );
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
     }
   }
 
   Future<void> _confirmPayment(DebtItem debt, DebtPaymentItem payment) async {
     try {
-      await widget.api.confirmDebtPayment(debtId: debt.id, paymentId: payment.id);
+      await widget.api
+          .confirmDebtPayment(debtId: debt.id, paymentId: payment.id);
       if (mounted) Navigator.pop(context);
       await _refresh();
       if (widget.onChanged != null) await widget.onChanged!();
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Abono confirmado.')));
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Abono confirmado.')));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
     }
   }
 
@@ -382,21 +561,32 @@ class _DebtsScreenState extends State<DebtsScreen> {
       barrierDismissible: false,
       builder: (_) => AlertDialog(
         title: const Text('Rechazar abono'),
-        content: TextField(controller: reasonController, decoration: const InputDecoration(labelText: 'Motivo opcional')),
+        content: TextField(
+            controller: reasonController,
+            decoration: const InputDecoration(labelText: 'Motivo opcional')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Volver')),
-          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Rechazar')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Volver')),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Rechazar')),
         ],
       ),
     );
     if (confirmed != true) return;
     try {
-      await widget.api.rejectDebtPayment(debtId: debt.id, paymentId: payment.id, reason: reasonController.text.trim());
+      await widget.api.rejectDebtPayment(
+          debtId: debt.id,
+          paymentId: payment.id,
+          reason: reasonController.text.trim());
       if (mounted) Navigator.pop(context);
       await _refresh();
       if (widget.onChanged != null) await widget.onChanged!();
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
     }
   }
 
@@ -414,12 +604,17 @@ class _DebtsScreenState extends State<DebtsScreen> {
     final eligible = _eligibleDebtsForCredit(credit);
     if (eligible.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No hay deudas activas compatibles. El saldo queda disponible para próximos períodos.')),
+        const SnackBar(
+            content: Text(
+                'No hay deudas activas compatibles. El saldo queda disponible para próximos períodos.')),
       );
       return;
     }
     DebtItem selected = eligible.first;
-    final amountController = TextEditingController(text: credit.remainingAmount.clamp(0, selected.remainingAmount).toStringAsFixed(0));
+    final amountController = TextEditingController(
+        text: credit.remainingAmount
+            .clamp(0, selected.remainingAmount)
+            .toStringAsFixed(0));
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -427,12 +622,17 @@ class _DebtsScreenState extends State<DebtsScreen> {
       enableDrag: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setModalState) => Padding(
-          padding: EdgeInsets.only(left: 18, right: 18, top: 18, bottom: MediaQuery.of(context).viewInsets.bottom + 18),
+          padding: EdgeInsets.only(
+              left: 18,
+              right: 18,
+              top: 18,
+              bottom: MediaQuery.of(context).viewInsets.bottom + 18),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Aplicar saldo a favor', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              const Text('Aplicar saldo a favor',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               Text(
                 'Disponible: ${money.format(credit.remainingAmount)}. Podés usarlo total o parcialmente para compensar una deuda activa con ${_memberName(credit.counterpartyMemberId)}.',
@@ -444,17 +644,21 @@ class _DebtsScreenState extends State<DebtsScreen> {
                 items: eligible
                     .map((d) => DropdownMenuItem(
                           value: d,
-                          child: Text('Deuda #${d.id} · pendiente ${money.format(d.remainingAmount)}'),
+                          child: Text(
+                              'Deuda #${d.id} · pendiente ${money.format(d.remainingAmount)}'),
                         ))
                     .toList(),
                 onChanged: (value) {
                   if (value == null) return;
                   setModalState(() {
                     selected = value;
-                    amountController.text = credit.remainingAmount.clamp(0, selected.remainingAmount).toStringAsFixed(0);
+                    amountController.text = credit.remainingAmount
+                        .clamp(0, selected.remainingAmount)
+                        .toStringAsFixed(0);
                   });
                 },
-                decoration: const InputDecoration(labelText: 'Deuda a compensar'),
+                decoration:
+                    const InputDecoration(labelText: 'Deuda a compensar'),
               ),
               const SizedBox(height: 10),
               TextField(
@@ -462,11 +666,14 @@ class _DebtsScreenState extends State<DebtsScreen> {
                 keyboardType: TextInputType.number,
                 decoration: InputDecoration(
                   labelText: 'Monto a aplicar',
-                  helperText: 'Máximo: ${money.format(credit.remainingAmount.clamp(0, selected.remainingAmount))}',
+                  helperText:
+                      'Máximo: ${money.format(credit.remainingAmount.clamp(0, selected.remainingAmount))}',
                 ),
               ),
               const SizedBox(height: 16),
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+              TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancelar')),
               const SizedBox(height: 8),
               SizedBox(
                 width: double.infinity,
@@ -475,10 +682,14 @@ class _DebtsScreenState extends State<DebtsScreen> {
                   onPressed: () async {
                     try {
                       final amount = _parseMoney(amountController.text);
-                      final maxAmount = credit.remainingAmount.clamp(0, selected.remainingAmount).toDouble();
+                      final maxAmount = credit.remainingAmount
+                          .clamp(0, selected.remainingAmount)
+                          .toDouble();
                       if (amount > maxAmount + 0.01) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('El monto máximo aplicable es ${money.format(maxAmount)}.')),
+                          SnackBar(
+                              content: Text(
+                                  'El monto máximo aplicable es ${money.format(maxAmount)}.')),
                         );
                         return;
                       }
@@ -492,7 +703,9 @@ class _DebtsScreenState extends State<DebtsScreen> {
                       await _refresh();
                       if (widget.onChanged != null) await widget.onChanged!();
                     } catch (e) {
-                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+                      if (mounted)
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(friendlyMessage(e))));
                     }
                   },
                   label: const Text('Aplicar saldo'),
@@ -511,7 +724,9 @@ class _DebtsScreenState extends State<DebtsScreen> {
       await _refresh();
       if (widget.onChanged != null) await widget.onChanged!();
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(friendlyMessage(e))));
     }
   }
 }
@@ -533,7 +748,8 @@ class _CreditBalanceCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final hasCompatibleDebts = compatibleDebtCount > 0 && onApply != null;
     final safeTitle = title.trim().isEmpty ? 'Saldo disponible' : title.trim();
-    final safeReason = reason.trim().isEmpty ? 'Saldo confirmado disponible.' : reason.trim();
+    final safeReason =
+        reason.trim().isEmpty ? 'Saldo confirmado disponible.' : reason.trim();
     final statusText = hasCompatibleDebts
         ? compatibleDebtCount == 1
             ? 'Tenés 1 deuda compatible para compensar.'
@@ -554,15 +770,22 @@ class _CreditBalanceCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: hasCompatibleDebts ? kPrimary.withOpacity(0.08) : Colors.black.withOpacity(0.04),
+        color: hasCompatibleDebts
+            ? kPrimary.withOpacity(0.08)
+            : Colors.black.withOpacity(0.04),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: hasCompatibleDebts ? kPrimary.withOpacity(0.18) : Colors.black.withOpacity(0.06)),
+        border: Border.all(
+            color: hasCompatibleDebts
+                ? kPrimary.withOpacity(0.18)
+                : Colors.black.withOpacity(0.06)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(
-            hasCompatibleDebts ? Icons.check_circle_outline_rounded : Icons.schedule_rounded,
+            hasCompatibleDebts
+                ? Icons.check_circle_outline_rounded
+                : Icons.schedule_rounded,
             size: 17,
             color: hasCompatibleDebts ? kPrimary : Colors.black54,
           ),
@@ -648,19 +871,30 @@ class _MiniStat extends StatelessWidget {
   final String value;
   final IconData icon;
 
-  const _MiniStat({required this.label, required this.value, required this.icon});
+  const _MiniStat(
+      {required this.label, required this.value, required this.icon});
 
   @override
   Widget build(BuildContext context) {
     return Container(
       width: 180,
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: Colors.white.withOpacity(0.14), borderRadius: BorderRadius.circular(20)),
+      decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.14),
+          borderRadius: BorderRadius.circular(20)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Icon(icon, color: Colors.white),
         const SizedBox(height: 8),
-        Text(label, style: TextStyle(color: Colors.white.withOpacity(0.72), fontSize: 12, fontWeight: FontWeight.w700)),
-        Text(value, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900)),
+        Text(label,
+            style: TextStyle(
+                color: Colors.white.withOpacity(0.72),
+                fontSize: 12,
+                fontWeight: FontWeight.w700)),
+        Text(value,
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w900)),
       ]),
     );
   }
@@ -705,19 +939,34 @@ class _PaymentTile extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            Expanded(child: Text(money.format(payment.amount), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900))),
-            Chip(label: Text(statusText), backgroundColor: statusColor.withOpacity(0.12), labelStyle: TextStyle(color: statusColor, fontWeight: FontWeight.w800)),
+            Expanded(
+                child: Text(money.format(payment.amount),
+                    style: const TextStyle(
+                        fontSize: 20, fontWeight: FontWeight.w900))),
+            Chip(
+                label: Text(statusText),
+                backgroundColor: statusColor.withOpacity(0.12),
+                labelStyle:
+                    TextStyle(color: statusColor, fontWeight: FontWeight.w800)),
           ]),
           const SizedBox(height: 4),
-          Text('Registró: ${memberName(payment.paidByMemberId)} · Fecha: ${payment.date}', style: const TextStyle(color: Colors.black54)),
+          Text(
+              'Registró: ${memberName(payment.paidByMemberId)} · Fecha: ${payment.date}',
+              style: const TextStyle(color: Colors.black54)),
           if (payment.status == 'confirmed') ...[
             const SizedBox(height: 4),
-            Text('Aplicado a deuda: ${money.format(payment.appliedAmount)}', style: const TextStyle(fontWeight: FontWeight.w700)),
-            if (payment.creditAmount > 0.01) Text('Excedente a favor: ${money.format(payment.creditAmount)}', style: const TextStyle(color: Colors.green, fontWeight: FontWeight.w800)),
+            Text('Aplicado a deuda: ${money.format(payment.appliedAmount)}',
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+            if (payment.creditAmount > 0.01)
+              Text('Excedente a favor: ${money.format(payment.creditAmount)}',
+                  style: const TextStyle(
+                      color: Colors.green, fontWeight: FontWeight.w800)),
           ],
-          if (payment.status == 'rejected' && payment.rejectedReason.isNotEmpty) ...[
+          if (payment.status == 'rejected' &&
+              payment.rejectedReason.isNotEmpty) ...[
             const SizedBox(height: 4),
-            Text('Motivo: ${payment.rejectedReason}', style: const TextStyle(color: Colors.red)),
+            Text('Motivo: ${payment.rejectedReason}',
+                style: const TextStyle(color: Colors.red)),
           ],
           if (payment.note.isNotEmpty) ...[
             const SizedBox(height: 4),
@@ -726,8 +975,14 @@ class _PaymentTile extends StatelessWidget {
           if (canConfirm || canReject) ...[
             const SizedBox(height: 10),
             Wrap(spacing: 8, children: [
-              ElevatedButton.icon(onPressed: onConfirm, icon: const Icon(Icons.check_circle_outline), label: const Text('Confirmar recibido')),
-              OutlinedButton.icon(onPressed: onReject, icon: const Icon(Icons.cancel_outlined), label: const Text('Rechazar')),
+              ElevatedButton.icon(
+                  onPressed: onConfirm,
+                  icon: const Icon(Icons.check_circle_outline),
+                  label: const Text('Confirmar recibido')),
+              OutlinedButton.icon(
+                  onPressed: onReject,
+                  icon: const Icon(Icons.cancel_outlined),
+                  label: const Text('Rechazar')),
             ]),
           ],
         ],
@@ -757,7 +1012,9 @@ class _DebtCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final sourceText = debt.source == 'automatic' ? 'Ajuste mensual ${debt.sourceMonth ?? ''}' : 'Manual';
+    final sourceText = debt.source == 'automatic'
+        ? 'Ajuste mensual ${debt.sourceMonth ?? ''}'
+        : 'Manual';
     final statusText = switch (debt.status) {
       'paid' => 'Saldada',
       'partial' => 'Parcial',
@@ -774,7 +1031,8 @@ class _DebtCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   '${memberName(debt.debtorMemberId)} → ${memberName(debt.creditorMemberId)}',
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+                  style: const TextStyle(
+                      fontSize: 20, fontWeight: FontWeight.w900),
                 ),
               ),
               Chip(label: Text(statusText)),
@@ -785,8 +1043,13 @@ class _DebtCard extends StatelessWidget {
           const SizedBox(height: 10),
           Text('Original: ${money.format(debt.originalAmount)}'),
           Text('Confirmado: ${money.format(debt.paidAmount)}'),
-          if (debt.pendingAmount > 0.01) Text('Pendiente de confirmación: ${money.format(debt.pendingAmount)}', style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
-          Text('Pendiente real: ${money.format(debt.remainingAmount)}', style: const TextStyle(fontWeight: FontWeight.bold)),
+          if (debt.pendingAmount > 0.01)
+            Text(
+                'Pendiente de confirmación: ${money.format(debt.pendingAmount)}',
+                style: const TextStyle(
+                    color: Colors.orange, fontWeight: FontWeight.bold)),
+          Text('Pendiente real: ${money.format(debt.remainingAmount)}',
+              style: const TextStyle(fontWeight: FontWeight.bold)),
           if (debt.reason.trim().isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(debt.reason),
@@ -796,9 +1059,20 @@ class _DebtCard extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              OutlinedButton.icon(onPressed: onPayments, icon: const Icon(Icons.receipt_long), label: const Text('Abonos')),
-              if (onPay != null) ElevatedButton.icon(onPressed: onPay, icon: const Icon(Icons.payments), label: const Text('Abonar')),
-              if (onCancel != null) TextButton.icon(onPressed: onCancel, icon: const Icon(Icons.cancel_outlined), label: const Text('Cancelar')),
+              OutlinedButton.icon(
+                  onPressed: onPayments,
+                  icon: const Icon(Icons.receipt_long),
+                  label: const Text('Abonos')),
+              if (onPay != null)
+                ElevatedButton.icon(
+                    onPressed: onPay,
+                    icon: const Icon(Icons.payments),
+                    label: const Text('Abonar')),
+              if (onCancel != null)
+                TextButton.icon(
+                    onPressed: onCancel,
+                    icon: const Icon(Icons.cancel_outlined),
+                    label: const Text('Cancelar')),
             ],
           ),
         ],

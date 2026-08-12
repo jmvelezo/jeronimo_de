@@ -252,6 +252,7 @@ class CreditBalanceRead(BaseModel):
     counterparty_member_id: int
     source_payment_id: int | None = None
     original_amount: float
+    source_advance_payment_id: int | None = None
     remaining_amount: float
     status: CreditBalanceStatus
     reason: str

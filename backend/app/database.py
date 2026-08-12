@@ -42,6 +42,7 @@ def _ensure_lightweight_migrations() -> None:
     """
     with engine.begin() as conn:
         _add_column_if_missing(conn, "householdperiodsettings", "active_month_override", "VARCHAR(7)")
+        _add_column_if_missing(conn, "creditbalance", "source_advance_payment_id", "INTEGER")
 
         if not settings.sqlalchemy_database_url.startswith("sqlite"):
             return

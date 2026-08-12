@@ -682,6 +682,7 @@ def credit_to_read(credit: CreditBalance) -> CreditBalanceRead:
         owner_member_id=credit.owner_member_id,
         counterparty_member_id=credit.counterparty_member_id,
         source_payment_id=credit.source_payment_id,
+        source_advance_payment_id=credit.source_advance_payment_id,
         original_amount=round_money(credit.original_amount),
         remaining_amount=round_money(credit.remaining_amount),
         status=credit.status,
@@ -739,6 +740,50 @@ def _advance_credit_reason(payment: MonthlyAdvancePayment) -> str:
     return f"Excedente confirmado del pago anticipado #{payment.id} del período {payment.month}"
 
 
+def _credit_rows_for_advance(session: Session, payment: MonthlyAdvancePayment) -> list[CreditBalance]:
+    candidates = session.exec(
+        select(CreditBalance).where(
+            CreditBalance.household_id == payment.household_id,
+            CreditBalance.owner_member_id == payment.paid_by_member_id,
+            CreditBalance.counterparty_member_id == payment.received_by_member_id,
+        )
+    ).all()
+    reason = _advance_credit_reason(payment)
+    marker = f"#{payment.id}"
+    return sorted(
+        [
+            row
+            for row in candidates
+            if row.source_advance_payment_id == payment.id
+            or row.reason == reason
+            or (marker in (row.reason or "") and "pago anticipado" in (row.reason or "").lower())
+        ],
+        key=lambda row: row.id or 0,
+    )
+
+
+def _locked_advance_allocations(
+    session: Session,
+    advance_payments: list[MonthlyAdvancePayment],
+) -> dict[int, tuple[float, float]]:
+    """Congela un anticipo cuando su credito ya fue usado total o parcialmente."""
+    locked: dict[int, tuple[float, float]] = {}
+    for payment in advance_payments:
+        rows = _credit_rows_for_advance(session, payment)
+        was_consumed = any(
+            row.status != CreditBalanceStatus.available
+            or round_money(row.remaining_amount) != round_money(row.original_amount)
+            for row in rows
+        )
+        if was_consumed:
+            locked[payment.id or 0] = (
+                round_money(payment.applied_amount),
+                round_money(payment.credit_amount),
+            )
+    return locked
+
+
+
 def _advance_payment_allocations(
     month: str,
     members: list[Member],
@@ -746,6 +791,7 @@ def _advance_payment_allocations(
     expenses: list[Expense],
     participations: list[MonthlyParticipation],
     advance_payments: list[MonthlyAdvancePayment],
+    locked_allocations: dict[int, tuple[float, float]] | None = None,
 ) -> dict[int, tuple[float, float]]:
     """Calcula aplicación vigente de pagos anticipados contra el resumen actual.
 
@@ -770,6 +816,14 @@ def _advance_payment_allocations(
         payer_balance = round_money(live_balance_by_member.get(payment.paid_by_member_id, 0))
         receiver_balance = round_money(live_balance_by_member.get(payment.received_by_member_id, 0))
         payer_debt = round_money(max(-payer_balance, 0))
+        if payment_id in (locked_allocations or {}):
+            applied, credit = (locked_allocations or {})[payment_id]
+            allocations[payment_id] = (round_money(applied), round_money(credit))
+            if applied > 0.01:
+                live_balance_by_member[payment.paid_by_member_id] = round_money(payer_balance + applied)
+                live_balance_by_member[payment.received_by_member_id] = round_money(receiver_balance - applied)
+            continue
+
         receiver_credit = round_money(max(receiver_balance, 0))
         applicable_now = round_money(min(payment.amount, payer_debt, receiver_credit))
         applied = applicable_now
@@ -800,16 +854,44 @@ def _advance_payment_views(
 
 def _sync_monthly_advance_allocations(month: str, household_id: int, session: Session) -> bool:
     members, incomes, expenses, participations, advance_payments = _monthly_summary_inputs(month, household_id, session)
-    allocations = _advance_payment_allocations(month, members, incomes, expenses, participations, advance_payments)
+    locked_allocations = _locked_advance_allocations(session, advance_payments)
+    allocations = _advance_payment_allocations(month, members, incomes, expenses, participations, advance_payments, locked_allocations)
     changed = False
 
     for payment in advance_payments:
+        if (payment.id or 0) in locked_allocations:
+            continue
+
         applied, credit = allocations.get(payment.id or 0, (0.0, round_money(payment.amount)))
         if round_money(payment.applied_amount) != applied or round_money(payment.credit_amount) != credit:
             payment.applied_amount = applied
             payment.credit_amount = credit
             payment.updated_at = datetime.now(timezone.utc)
             session.add(payment)
+            changed = True
+
+        linked_credits = _credit_rows_for_advance(session, payment)
+        for row in linked_credits:
+            if row.source_advance_payment_id is None:
+                row.source_advance_payment_id = payment.id
+                row.updated_at = datetime.now(timezone.utc)
+                session.add(row)
+                changed = True
+
+        if credit > 0.01 and not linked_credits:
+            session.add(
+                CreditBalance(
+                    household_id=household_id,
+                    owner_member_id=payment.paid_by_member_id,
+                    counterparty_member_id=payment.received_by_member_id,
+                    source_advance_payment_id=payment.id,
+                    original_amount=credit,
+                    remaining_amount=credit,
+                    status=CreditBalanceStatus.available,
+                    reason=_advance_credit_reason(payment),
+                )
+            )
+            session.flush()
             changed = True
 
         # Compatibilidad con datos previos: algunas confirmaciones tempranas crearon
@@ -853,10 +935,26 @@ def _sync_monthly_advance_allocations(month: str, household_id: int, session: Se
 
     return changed
 
+def _sync_all_advance_credits(household_id: int, session: Session, month: str | None = None) -> bool:
+    query = select(MonthlyAdvancePayment).where(
+        MonthlyAdvancePayment.household_id == household_id,
+        MonthlyAdvancePayment.status == PaymentStatus.confirmed,
+    )
+    if month is not None:
+        query = query.where(MonthlyAdvancePayment.month == month)
+    payments = session.exec(query).all()
+    changed = False
+    for payment_month in sorted({payment.month for payment in payments}):
+        changed = _sync_monthly_advance_allocations(payment_month, household_id, session) or changed
+    return changed
+
+
+
 
 def build_month_summary(month: str, household_id: int, session: Session) -> MonthSummary:
     members, incomes, expenses, participations, advance_payments = _monthly_summary_inputs(month, household_id, session)
-    allocations = _advance_payment_allocations(month, members, incomes, expenses, participations, advance_payments)
+    locked_allocations = _locked_advance_allocations(session, advance_payments)
+    allocations = _advance_payment_allocations(month, members, incomes, expenses, participations, advance_payments, locked_allocations)
     advance_payment_views = _advance_payment_views(advance_payments, allocations)
     summary = calculate_month_summary(month, members, incomes, expenses, participations, advance_payment_views)
     if isinstance(summary, MonthSummary):
@@ -1235,6 +1333,10 @@ def create_manual_debt(
     ensure_member_in_household(session, current_member.household_id, payload.creditor_member_id)
     if payload.debtor_member_id == payload.creditor_member_id:
         raise HTTPException(status_code=400, detail="Deudor y acreedor no pueden ser la misma persona")
+    if current_member.role not in {MemberRole.owner, MemberRole.admin} and current_member.id not in {
+        payload.debtor_member_id, payload.creditor_member_id
+    }:
+        raise HTTPException(status_code=403, detail="Solo integrantes involucrados o un administrador pueden crear esta deuda")
     debt = Debt(
         household_id=current_member.household_id,
         debtor_member_id=payload.debtor_member_id,
@@ -1291,17 +1393,18 @@ def create_automatic_debts_from_summary(
     session: Session = Depends(get_session),
 ):
     ensure_month_open(session, current_member.household_id, payload.month)
+    ensure_operator(current_member)
     previous = session.exec(
         select(Debt).where(
             Debt.household_id == current_member.household_id,
             Debt.source == DebtSource.automatic,
             Debt.source_month == payload.month,
-            Debt.status == DebtStatus.active,
+            Debt.status != DebtStatus.cancelled,
         )
     ).all()
 
     for debt in previous:
-        if debt_paid_amount(session, debt.id or 0) > 0:
+        if debt_paid_amount(session, debt.id or 0) > 0 or debt_pending_amount(session, debt.id or 0) > 0:
             raise HTTPException(
                 status_code=409,
                 detail="Ya existe una deuda automática de este mes con abonos cargados. No se cancela ni se pisa para proteger la trazabilidad.",
@@ -1489,6 +1592,32 @@ def void_debt_payment(
     return payment_to_read(payment)
 
 
+
+@router.post("/credit-balances/reconcile")
+def reconcile_advance_credits(
+    month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
+    current_member: Member = Depends(get_current_member),
+    session: Session = Depends(get_session),
+):
+    """Repara, de forma explicita, excedentes confirmados sin saldo formal."""
+    ensure_operator(current_member)
+    changed = _sync_all_advance_credits(current_member.household_id, session, month)
+    if changed:
+        session.commit()
+    credits = session.exec(
+        select(CreditBalance).where(
+            CreditBalance.household_id == current_member.household_id,
+            CreditBalance.source_advance_payment_id != None,
+        )
+    ).all()
+    return {
+        "ok": True,
+        "changed": changed,
+        "month": month,
+        "linked_advance_credit_count": len(credits),
+    }
+
+
 @router.get("/credit-balances", response_model=list[CreditBalanceRead])
 def list_credit_balances(
     active_only: bool = True,
@@ -1564,6 +1693,9 @@ def cancel_debt(
     session: Session = Depends(get_session),
 ):
     debt = get_debt_for_household(session, current_member.household_id, debt_id)
+    if current_member.role not in {MemberRole.owner, MemberRole.admin} and current_member.id not in {debt.debtor_member_id, debt.creditor_member_id}:
+        raise HTTPException(status_code=403, detail="Solo integrantes involucrados o un administrador pueden cancelar esta deuda")
+
     if debt_paid_amount(session, debt.id or 0) > 0 or debt_pending_amount(session, debt.id or 0) > 0:
         raise HTTPException(status_code=409, detail="No se cancela una deuda con abonos registrados o pendientes. La trazabilidad queda protegida.")
     debt.status = DebtStatus.cancelled
@@ -1682,6 +1814,15 @@ def reset_active_period_basic(
             MonthlyAdvancePayment.month == active_month,
         )
     ).all()
+    confirmed_advance_payments = [
+        payment for payment in advance_payments if payment.status == PaymentStatus.confirmed
+    ]
+    if confirmed_advance_payments:
+        raise HTTPException(
+            status_code=409,
+            detail="No se puede reiniciar el periodo porque contiene transferencias confirmadas. Esos movimientos reales deben conservarse y corregirse mediante una reversion auditable.",
+        )
+
 
     deleted_incomes = len(incomes)
     deleted_expenses = len(expenses)
@@ -1818,10 +1959,55 @@ def close_month(
     existing = get_month_close(session, current_member.household_id, payload.month)
     if existing:
         raise HTTPException(status_code=409, detail="Este mes ya estaba cerrado. Reabrilo si necesitás corregir algo.")
+    _sync_monthly_advance_allocations(payload.month, current_member.household_id, session)
+    session.flush()
+
 
     summary = build_month_summary(payload.month, current_member.household_id, session)
     if summary.total_income <= 0:
         raise HTTPException(status_code=400, detail="No se puede cerrar un mes sin ingresos cargados.")
+    expected_debts = {
+        (item.debtor_member_id, item.creditor_member_id): round_money(item.amount)
+        for item in summary.settlements
+    }
+    existing_automatic = session.exec(
+        select(Debt).where(
+            Debt.household_id == current_member.household_id,
+            Debt.source == DebtSource.automatic,
+            Debt.source_month == payload.month,
+            Debt.status != DebtStatus.cancelled,
+        )
+    ).all()
+    existing_debts: dict[tuple[int, int], float] = {}
+    has_movements = False
+    for debt in existing_automatic:
+        key = (debt.debtor_member_id, debt.creditor_member_id)
+        existing_debts[key] = round_money(existing_debts.get(key, 0) + debt.original_amount)
+        has_movements = has_movements or debt_paid_amount(session, debt.id or 0) > 0 or debt_pending_amount(session, debt.id or 0) > 0
+
+    if existing_debts != expected_debts:
+        if has_movements:
+            raise HTTPException(
+                status_code=409,
+                detail="Las deudas automaticas del periodo tienen abonos y ya no coinciden con el cierre. Revisalas antes de cerrar para no duplicar movimientos.",
+            )
+        for debt in existing_automatic:
+            debt.status = DebtStatus.cancelled
+            debt.updated_at = datetime.now(timezone.utc)
+            session.add(debt)
+        for settlement in summary.settlements:
+            session.add(
+                Debt(
+                    household_id=current_member.household_id,
+                    debtor_member_id=settlement.debtor_member_id,
+                    creditor_member_id=settlement.creditor_member_id,
+                    source=DebtSource.automatic,
+                    source_month=payload.month,
+                    original_amount=settlement.amount,
+                    reason=settlement.reason,
+                )
+            )
+
 
     close = MonthlyClose(
         household_id=current_member.household_id,
