@@ -195,11 +195,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-
   double get _myAvailableCreditBalance {
-    return creditBalances
-        .where((item) => item.ownerMemberId == widget.session.member.id && item.status == 'available' && item.remainingAmount > 0.01)
-        .fold<double>(0.0, (total, item) => total + item.remainingAmount);
+    return creditBalances.where((item) => item.ownerMemberId == widget.session.member.id && item.status == 'available' && item.remainingAmount > 0.01).fold<double>(0.0, (total, item) => total + item.remainingAmount);
   }
 
   Widget _creditBalanceChip(double amount, {bool compact = false}) {
@@ -300,7 +297,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-
   Future<void> _openInternal(Widget screen) async {
     final result = await Navigator.of(context).push<int>(MaterialPageRoute(builder: (_) => screen));
     if (!mounted) return;
@@ -314,9 +310,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return AppHeroHeader(
       eyebrow: 'ARS · Hogar conectado · $month',
       title: widget.session.household.name,
-      subtitle: offlineMode
-          ? 'Hola, ${widget.session.member.name}. Vemos la última sincronización guardada.'
-          : 'Hola, ${widget.session.member.name}. Resumen claro de casa, tareas e IA.',
+      subtitle: offlineMode ? 'Hola, ${widget.session.member.name}. Vemos la última sincronización guardada.' : 'Hola, ${widget.session.member.name}. Resumen claro de casa, tareas e IA.',
       icon: Icons.roofing_rounded,
       assetIconPath: kBrandNavCasa,
       trailing: IconButton(
@@ -341,7 +335,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         return _overviewTab(s);
     }
   }
-
 
   Widget _overviewTab(MonthSummary s) {
     final matchingMembers = s.members.where((item) => item.memberId == widget.session.member.id).toList();
@@ -558,7 +551,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-
   Widget _weeklyAiAdviceCard() {
     final result = weeklyAi;
     final tips = result?.tips ?? [];
@@ -576,6 +568,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           return kPrimary;
       }
     }
+
     final color = firstTip == null ? kPrimary : levelColor(firstTip.level);
     return AppCard(
       gradient: LinearGradient(colors: [color.withOpacity(0.92), const Color(0xFF312E81)]),
@@ -644,9 +637,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            settings?.weeklyEnabled == true
-                ? 'Análisis automático activo · ${settings!.frequencyLabel} · ARS como moneda base.'
-                : 'Automático desactivado o manual · podés configurarlo en Ajustes avanzados.',
+            settings?.weeklyEnabled == true ? 'Análisis automático activo · ${settings!.frequencyLabel} · ARS como moneda base.' : 'Automático desactivado o manual · podés configurarlo en Ajustes avanzados.',
             style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 12),
           ),
         ],
@@ -655,9 +646,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _syncStatusCard() {
-    final last = lastSuccessfulSync == null
-        ? 'Sin sincronización previa'
-        : 'Última sincronización: ${lastSuccessfulSync!.toLocal().toString().substring(0, 16)}';
+    final last = lastSuccessfulSync == null ? 'Sin sincronización previa' : 'Última sincronización: ${lastSuccessfulSync!.toLocal().toString().substring(0, 16)}';
     final color = offlineMode ? kWarning : kSuccess;
     return AppCard(
       color: color.withOpacity(0.08),
@@ -716,9 +705,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
     final danger = item.overdueCount > 0;
     final color = danger ? kDanger : (item.dueSoonCount > 0 || item.highPriorityCount > 0 ? kWarning : kPrimary);
-    final message = item.pendingCount == 0
-        ? 'Sin tareas comunes pendientes.'
-        : '${item.pendingCount} pendiente(s), ${item.overdueCount} vencida(s), ${item.dueSoonCount} próxima(s), ${item.assignedToMeCount} para mí.';
+    final message = item.pendingCount == 0 ? 'Sin tareas comunes pendientes.' : '${item.pendingCount} pendiente(s), ${item.overdueCount} vencida(s), ${item.dueSoonCount} próxima(s), ${item.assignedToMeCount} para mí.';
     return AppCard(
       color: color.withOpacity(0.08),
       border: Border.all(color: color.withOpacity(0.18)),
@@ -772,9 +759,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         const SizedBox(height: 14),
         BigActionButton(
-          onPressed: members.isEmpty
-              ? null
-              : () => _openInternal(DebtsScreen(api: widget.api, members: members, month: month, currentMemberId: widget.session.member.id, onChanged: _refresh)),
+          onPressed: members.isEmpty ? null : () => _openInternal(DebtsScreen(api: widget.api, members: members, month: month, currentMemberId: widget.session.member.id, onChanged: _refresh)),
           icon: Icons.account_balance_wallet_outlined,
           title: 'Ver deudas y abonos',
           subtitle: 'Manual, automática y pagos parciales',
@@ -789,9 +774,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       children: [
         const SectionTitle(title: 'Historial', subtitle: 'Cerrar el mes y consultar fotos anteriores.', icon: Icons.history_outlined),
         BigActionButton(
-          onPressed: members.isEmpty
-              ? null
-              : () => _openInternal(HistoryScreen(api: widget.api, members: members, currentMonth: month, onChanged: _refresh)),
+          onPressed: members.isEmpty ? null : () => _openInternal(HistoryScreen(api: widget.api, members: members, currentMonth: month, onChanged: _refresh)),
           icon: Icons.event_available_outlined,
           title: 'Historial y cierre mensual',
           subtitle: 'Cierre, reapertura y consulta',
@@ -799,7 +782,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ],
     );
   }
-
 
   Widget _personalTab() {
     return Column(
@@ -950,7 +932,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-
   Widget _aiTab() {
     return AiScreen(api: widget.api, month: month, currentMember: widget.session.member, embedded: true);
   }
@@ -1018,7 +999,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-
   Widget _participationCard() {
     return AppCard(
       child: Column(
@@ -1076,12 +1056,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             icon: Icons.event_repeat_outlined,
             assetIconPath: kBrandAhorro,
             title: 'Gastos fijos',
-            subtitle: fixedExpenseTemplates.isEmpty
-                ? 'Creá plantillas y generá gastos del mes cuando quieras.'
-                : '${fixedExpenseTemplates.length} plantilla${fixedExpenseTemplates.length == 1 ? '' : 's'} activa${fixedExpenseTemplates.length == 1 ? '' : 's'} para sugerir.',
+            subtitle: fixedExpenseTemplates.isEmpty ? 'Creá plantillas y generá gastos del mes cuando quieras.' : '${fixedExpenseTemplates.length} plantilla${fixedExpenseTemplates.length == 1 ? '' : 's'} activa${fixedExpenseTemplates.length == 1 ? '' : 's'} para sugerir.',
             color: kSuccess,
           ),
-
           const SizedBox(height: 10),
           SoftActionTile(
             onTap: members.isEmpty ? null : _showCardImportPreviewSheet,
@@ -1093,9 +1070,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 10),
           SoftActionTile(
-            onTap: members.isEmpty
-                ? null
-                : () => _openInternal(ExpensesScreen(api: widget.api, members: members, month: month, onChanged: _refresh)),
+            onTap: members.isEmpty ? null : () => _openInternal(ExpensesScreen(api: widget.api, members: members, month: month, onChanged: _refresh)),
             icon: Icons.list_alt_outlined,
             assetIconPath: kBrandGastos,
             title: 'Ver gastos del mes',
@@ -1232,9 +1207,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               icon: Icons.receipt_long_outlined,
               title: 'Ver deudas formales',
               subtitle: 'Manual, automática, abonos y saldos a favor',
-              onPressed: members.isEmpty
-                  ? null
-                  : () => _openInternal(DebtsScreen(api: widget.api, members: members, month: month, currentMemberId: widget.session.member.id, onChanged: _refresh)),
+              onPressed: members.isEmpty ? null : () => _openInternal(DebtsScreen(api: widget.api, members: members, month: month, currentMemberId: widget.session.member.id, onChanged: _refresh)),
             ),
           ],
         ),
@@ -1315,9 +1288,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             children: [
               DropdownButtonFormField<SettlementSuggestion>(
                 value: selected,
-                items: settlements
-                    .map((item) => DropdownMenuItem(value: item, child: Text('A ${_memberName(item.creditorMemberId)} · sugerido ${money.format(item.amount)}')))
-                    .toList(),
+                items: settlements.map((item) => DropdownMenuItem(value: item, child: Text('A ${_memberName(item.creditorMemberId)} · sugerido ${money.format(item.amount)}'))).toList(),
                 onChanged: (value) => setModalState(() {
                   selected = value ?? selected;
                   amountController.text = selected.amount.toStringAsFixed(0);
@@ -1325,7 +1296,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 decoration: const InputDecoration(labelText: 'A quién pagaste'),
               ),
               const SizedBox(height: 10),
-              TextField(controller: amountController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Monto transferido')), 
+              TextField(controller: amountController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Monto transferido')),
               const SizedBox(height: 10),
               TextField(controller: noteController, decoration: const InputDecoration(labelText: 'Nota opcional')),
               const SizedBox(height: 16),
@@ -1559,7 +1530,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-
   Future<List<FixedExpenseTemplateItem>> _loadFixedExpenseTemplates({bool activeOnly = false}) async {
     try {
       return await widget.api.getFixedExpenses(activeOnly: activeOnly);
@@ -1572,9 +1542,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _showFixedExpensesSheet() async {
     var templates = await _loadFixedExpenseTemplates(activeOnly: false);
     var busy = false;
-    var message = templates.isEmpty
-        ? 'Todavía no hay plantillas. Creá una para sugerir gastos cada mes.'
-        : 'Generá solo los gastos que correspondan a $month. No se cargan automáticamente.';
+    var message = templates.isEmpty ? 'Todavía no hay plantillas. Creá una para sugerir gastos cada mes.' : 'Generá solo los gastos que correspondan a $month. No se cargan automáticamente.';
 
     await showModalBottomSheet(
       context: context,
@@ -1616,9 +1584,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               await reload();
               await _refresh();
               setModalState(() {
-                message = generated.isEmpty
-                    ? 'No se generaron gastos nuevos: las plantillas activas ya estaban cargadas o no hay plantillas activas.'
-                    : 'Se generaron ${generated.length} gasto${generated.length == 1 ? '' : 's'} fijo${generated.length == 1 ? '' : 's'} para $month.';
+                message = generated.isEmpty ? 'No se generaron gastos nuevos: las plantillas activas ya estaban cargadas o no hay plantillas activas.' : 'Se generaron ${generated.length} gasto${generated.length == 1 ? '' : 's'} fijo${generated.length == 1 ? '' : 's'} para $month.';
               });
             } catch (e) {
               setModalState(() => message = friendlyMessage(e));
@@ -1804,7 +1770,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-
   String _dateOnly(DateTime date) => '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
 
   String _dateInputForCardImport(CardImportPreviewItem item) {
@@ -1845,10 +1810,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final date = _parseCardImportDate(draft.dateController.text);
     final normalizedDescription = _normalizeImportText(draft.descriptionController.text);
     return existingExpenses.any((expense) {
-      return expense.paidByMemberId == draft.paidByMemberId &&
-          expense.date == _dateOnly(date) &&
-          _importAmountCents(expense.amount) == _importAmountCents(amount) &&
-          _normalizeImportText(expense.description) == normalizedDescription;
+      return expense.paidByMemberId == draft.paidByMemberId && expense.date == _dateOnly(date) && _importAmountCents(expense.amount) == _importAmountCents(amount) && _normalizeImportText(expense.description) == normalizedDescription;
     });
   }
 
@@ -1866,9 +1828,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final sameDate = expense.date == _dateOnly(date);
       final sameAmount = _importAmountCents(expense.amount) == _importAmountCents(amount);
       final otherDescription = _normalizeImportText(expense.description);
-      final similarDescription = normalizedDescription.isNotEmpty &&
-          otherDescription.isNotEmpty &&
-          (normalizedDescription.contains(otherDescription) || otherDescription.contains(normalizedDescription));
+      final similarDescription = normalizedDescription.isNotEmpty && otherDescription.isNotEmpty && (normalizedDescription.contains(otherDescription) || otherDescription.contains(normalizedDescription));
       return (sameDate && sameAmount) || (sameAmount && similarDescription);
     });
   }
@@ -1879,6 +1839,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     } catch (_) {
       return 0;
     }
+  }
+
+  String _cardImportMoney(double amount) {
+    final cents = (amount * 100).round();
+    return NumberFormat.currency(
+      locale: 'es_AR',
+      symbol: r'$ ',
+      decimalDigits: cents % 100 == 0 ? 0 : 2,
+    ).format(amount);
   }
 
   String _newCardImportBatchId() {
@@ -1956,7 +1925,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         title: const Text('Importar resumen de tarjeta'),
-        content: Text('Se procesará: ${parts.join(', ')}. Total a cargar: ${money.format(total)}. Los gastos comunes irán a Casa; los personales, tarjeta/deuda y "me deben" quedarán solo en Personal local. Al finalizar se mostrará un resumen por lote.'),
+        content: Text('Se procesará: ${parts.join(', ')}. Total a cargar: ${_cardImportMoney(total)}. Los gastos comunes irán a Casa; los personales, tarjeta/deuda y "me deben" quedarán solo en Personal local. Al finalizar se mostrará un resumen por lote.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
           FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Importar')),
@@ -1981,11 +1950,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final amount = _parseMoneyInput(draft.amountController.text);
       final date = _parseCardImportDate(draft.dateController.text);
       total += amount;
-      lines.add('- ${_dateOnly(date)} · $description · ${money.format(amount)} · ${_cardImportTrace(batchId: batchId, index: i, draft: draft)}');
+      lines.add('- ${_dateOnly(date)} · $description · ${_cardImportMoney(amount)} · ${_cardImportTrace(batchId: batchId, index: i, draft: draft)}');
     }
-    final safeTitle = title.trim().isEmpty
-        ? 'Consumos personales de ${_memberName(debtorMemberId)} en tarjeta de ${_memberName(creditorMemberId)}'
-        : title.trim();
+    final safeTitle = title.trim().isEmpty ? 'Consumos personales de ${_memberName(debtorMemberId)} en tarjeta de ${_memberName(creditorMemberId)}' : title.trim();
     final visibleLines = lines.take(30).toList();
     if (lines.length > visibleLines.length) visibleLines.add('- ... y ${lines.length - visibleLines.length} consumo(s) más.');
     return [
@@ -1996,7 +1963,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       'Deudor: ${_memberName(debtorMemberId)}.',
       'Acreedor: ${_memberName(creditorMemberId)}.',
       'Cantidad de consumos: ${drafts.length}.',
-      'Total agrupado: ${money.format(total)}.',
+      'Total agrupado: ${_cardImportMoney(total)}.',
       '',
       'Consumos incluidos:',
       ...visibleLines,
@@ -2036,7 +2003,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final amount = _parseMoneyInput(draft.amountController.text);
       final date = _parseCardImportDate(draft.dateController.text);
       total += amount;
-      lines.add('- ${_dateOnly(date)} · $description · ${money.format(amount)} · ${_cardImportTrace(batchId: batchId, index: i, draft: draft)}');
+      lines.add('- ${_dateOnly(date)} · $description · ${_cardImportMoney(amount)} · ${_cardImportTrace(batchId: batchId, index: i, draft: draft)}');
     }
     final safeTitle = title.trim().isEmpty ? 'Consumos agregados desde resumen de tarjeta' : title.trim();
     final visibleLines = lines.take(30).toList();
@@ -2048,9 +2015,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       'Lote: $batchId.',
       'Deuda existente: #${debt.id}.',
       'Relación: ${_memberName(debt.debtorMemberId)} debe a ${_memberName(debt.creditorMemberId)}.',
-      'Saldo pendiente antes de agregar: ${money.format(debt.remainingAmount)}.',
+      'Saldo pendiente antes de agregar: ${_cardImportMoney(debt.remainingAmount)}.',
       'Cantidad de consumos agregados: ${drafts.length}.',
-      'Total agregado: ${money.format(total)}.',
+      'Total agregado: ${_cardImportMoney(total)}.',
       '',
       'Consumos agregados:',
       ...visibleLines,
@@ -2062,9 +2029,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     required String batchId,
     required List<DebtItem> debts,
   }) async {
-    final compatibleDebts = debts
-        .where((debt) => debt.source == 'manual' && debt.status != 'cancelled' && debt.status != 'paid' && debt.remainingAmount > 0.01)
-        .toList();
+    final compatibleDebts = debts.where((debt) => debt.source == 'manual' && debt.status != 'cancelled' && debt.status != 'paid' && debt.remainingAmount > 0.01).toList();
     if (compatibleDebts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No hay deudas manuales activas para agregar consumos. Usá Crear deuda compartida.')));
       return null;
@@ -2085,15 +2050,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '${selectedDrafts.length} consumo${selectedDrafts.length == 1 ? '' : 's'} seleccionado${selectedDrafts.length == 1 ? '' : 's'} · Total ${money.format(total)}',
+                    '${selectedDrafts.length} consumo${selectedDrafts.length == 1 ? '' : 's'} seleccionado${selectedDrafts.length == 1 ? '' : 's'} · Total ${_cardImportMoney(total)}',
                     style: const TextStyle(fontWeight: FontWeight.w800),
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<int>(
                     value: selectedDebt.id,
-                    items: compatibleDebts
-                        .map((debt) => DropdownMenuItem(value: debt.id, child: Text(_debtOptionLabel(debt))))
-                        .toList(),
+                    items: compatibleDebts.map((debt) => DropdownMenuItem(value: debt.id, child: Text(_debtOptionLabel(debt)))).toList(),
                     onChanged: (value) => setDialogState(() {
                       selectedDebt = compatibleDebts.firstWhere((debt) => debt.id == value, orElse: () => selectedDebt);
                     }),
@@ -2110,7 +2073,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(color: kWarning.withOpacity(0.10), borderRadius: BorderRadius.circular(16)),
                     child: Text(
-                      'Se aumentará el monto original de la deuda #${selectedDebt.id} en ${money.format(total)} y se agregará una nota con el detalle de consumos. No se modifican abonos ni pagos existentes.',
+                      'Se aumentará el monto original de la deuda #${selectedDebt.id} en ${_cardImportMoney(total)} y se agregará una nota con el detalle de consumos. No se modifican abonos ni pagos existentes.',
                       style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, height: 1.25),
                     ),
                   ),
@@ -2118,12 +2081,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Text(
                     selectedDrafts.take(6).map((draft) {
                       final description = draft.descriptionController.text.trim().isEmpty ? 'Movimiento sin descripción' : draft.descriptionController.text.trim();
-                      return '• $description · ${money.format(_safeDraftAmount(draft))}';
+                      return '• $description · ${_cardImportMoney(_safeDraftAmount(draft))}';
                     }).join('\n'),
                     style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, height: 1.25),
                   ),
-                  if (selectedDrafts.length > 6)
-                    Text('• ... y ${selectedDrafts.length - 6} más.', style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700)),
+                  if (selectedDrafts.length > 6) Text('• ... y ${selectedDrafts.length - 6} más.', style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700)),
                 ],
               ),
             ),
@@ -2177,16 +2139,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '${selectedDrafts.length} consumo${selectedDrafts.length == 1 ? '' : 's'} seleccionado${selectedDrafts.length == 1 ? '' : 's'} · Total ${money.format(total)}',
+                    '${selectedDrafts.length} consumo${selectedDrafts.length == 1 ? '' : 's'} seleccionado${selectedDrafts.length == 1 ? '' : 's'} · Total ${_cardImportMoney(total)}',
                     style: const TextStyle(fontWeight: FontWeight.w800),
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<int>(
                     value: debtorMemberId,
-                    items: members
-                        .where((member) => member.id != creditorMemberId)
-                        .map((member) => DropdownMenuItem(value: member.id, child: Text('${member.name} debe')))
-                        .toList(),
+                    items: members.where((member) => member.id != creditorMemberId).map((member) => DropdownMenuItem(value: member.id, child: Text('${member.name} debe'))).toList(),
                     onChanged: (value) => setDialogState(() {
                       debtorMemberId = value ?? debtorMemberId;
                       titleController.text = 'Consumos personales de ${_memberName(debtorMemberId)} en tarjeta de ${_memberName(creditorMemberId)}';
@@ -2196,10 +2155,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   const SizedBox(height: 10),
                   DropdownButtonFormField<int>(
                     value: creditorMemberId,
-                    items: members
-                        .where((member) => member.id != debtorMemberId)
-                        .map((member) => DropdownMenuItem(value: member.id, child: Text('${member.name} cobra')))
-                        .toList(),
+                    items: members.where((member) => member.id != debtorMemberId).map((member) => DropdownMenuItem(value: member.id, child: Text('${member.name} cobra'))).toList(),
                     onChanged: (value) => setDialogState(() {
                       creditorMemberId = value ?? creditorMemberId;
                       if (debtorMemberId == creditorMemberId) {
@@ -2228,12 +2184,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Text(
                     selectedDrafts.take(6).map((draft) {
                       final description = draft.descriptionController.text.trim().isEmpty ? 'Movimiento sin descripción' : draft.descriptionController.text.trim();
-                      return '• $description · ${money.format(_safeDraftAmount(draft))}';
+                      return '• $description · ${_cardImportMoney(_safeDraftAmount(draft))}';
                     }).join('\n'),
                     style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700, height: 1.25),
                   ),
-                  if (selectedDrafts.length > 6)
-                    Text('• ... y ${selectedDrafts.length - 6} más.', style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700)),
+                  if (selectedDrafts.length > 6) Text('• ... y ${selectedDrafts.length - 6} más.', style: const TextStyle(color: kMuted, fontWeight: FontWeight.w700)),
                 ],
               ),
             ),
@@ -2306,9 +2261,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }).toList();
 
     var busy = false;
-    var sheetMessage = preview.items.isEmpty
-        ? 'No se detectaron movimientos importables. Podés probar con otro resumen digital.'
-        : 'Vista previa: elegí destino por movimiento: Casa, Personal mío, Tarjeta/deuda, Me deben o No importar. Nada se carga sin confirmación.';
+    var sheetMessage = preview.items.isEmpty ? 'No se detectaron movimientos importables. Podés probar con otro resumen digital.' : 'Vista previa: elegí destino por movimiento: Casa, Personal mío, Tarjeta/deuda, Me deben o No importar. Nada se carga sin confirmación.';
 
     try {
       await showModalBottomSheet(
@@ -2366,12 +2319,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     draft.selected = false;
                     draft.destination = _CardImportDestination.skip;
                   }
-                  sheetMessage = 'Deuda compartida creada: ${_memberName(debtDraft.debtorMemberId)} debe ${money.format(total)} a ${_memberName(debtDraft.creditorMemberId)}. Los consumos quedaron marcados y no se importarán otra vez.';
+                  sheetMessage = 'Deuda compartida creada: ${_memberName(debtDraft.debtorMemberId)} debe ${_cardImportMoney(total)} a ${_memberName(debtDraft.creditorMemberId)}. Los consumos quedaron marcados y no se importarán otra vez.';
                 });
                 await _refresh();
                 if (mounted) {
                   ScaffoldMessenger.of(this.context).showSnackBar(
-                    SnackBar(content: Text('Deuda compartida creada por ${money.format(total)} con ${selectedForDebt.length} consumo(s).')),
+                    SnackBar(content: Text('Deuda compartida creada por ${_cardImportMoney(total)} con ${selectedForDebt.length} consumo(s).')),
                   );
                 }
               } on FormatException {
@@ -2433,12 +2386,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     draft.selected = false;
                     draft.destination = _CardImportDestination.skip;
                   }
-                  sheetMessage = 'Consumos agregados a deuda #${target.debt.id}: ${money.format(total)}. Quedaron marcados y no se importarán otra vez.';
+                  sheetMessage = 'Consumos agregados a deuda #${target.debt.id}: ${_cardImportMoney(total)}. Quedaron marcados y no se importarán otra vez.';
                 });
                 await _refresh();
                 if (mounted) {
                   ScaffoldMessenger.of(this.context).showSnackBar(
-                    SnackBar(content: Text('Se agregaron ${selectedForDebt.length} consumo(s) a deuda #${target.debt.id} por ${money.format(total)}.')),
+                    SnackBar(content: Text('Se agregaron ${selectedForDebt.length} consumo(s) a deuda #${target.debt.id} por ${_cardImportMoney(total)}.')),
                   );
                 }
               } on FormatException {
@@ -2655,7 +2608,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       children: [
                         Expanded(
                           child: Text(
-                            '${selectedDrafts.length} a importar · ${money.format(selectedTotal)} · Casa $commonCount · Personal $personalCount · Tarjeta/deuda $cardDebtCount · Me deben $owedToMeCount · Deuda compartida $sharedDebtSentCount · Omitidos $skippedCount',
+                            '${selectedDrafts.length} a importar · ${_cardImportMoney(selectedTotal)} · Casa $commonCount · Personal $personalCount · Tarjeta/deuda $cardDebtCount · Me deben $owedToMeCount · Deuda compartida $sharedDebtSentCount · Omitidos $skippedCount',
                             style: const TextStyle(color: kInk, fontWeight: FontWeight.w900),
                           ),
                         ),
@@ -2686,7 +2639,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         draft: drafts[i],
                         members: members,
                         currentMemberId: widget.session.member.id,
-                        money: money,
                         enabled: !busy,
                         onChanged: () => setModalState(() {}),
                         onDiscard: () => setModalState(() => drafts[i].selected = false),
@@ -2793,9 +2745,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
-
-
-
 enum _CardImportDestination { common, personal, cardDebt, owedToMe, skip }
 
 class _CardImportSharedDebtDraft {
@@ -2861,7 +2810,9 @@ class _CardImportDraft {
       destination: _CardImportDestination.common,
       dateController: TextEditingController(text: dateText),
       descriptionController: TextEditingController(text: item.description),
-      amountController: TextEditingController(text: item.amount.toStringAsFixed(0)),
+      amountController: TextEditingController(
+        text: item.amount.toStringAsFixed(2).replaceAll('.', ','),
+      ),
       categoryController: TextEditingController(text: item.category.isEmpty ? 'General' : item.category),
       noteController: TextEditingController(text: 'Importado desde resumen de tarjeta'),
       installments: item.installments,
@@ -2884,7 +2835,6 @@ class _CardImportDraftCard extends StatelessWidget {
   final _CardImportDraft draft;
   final List<Member> members;
   final int currentMemberId;
-  final NumberFormat money;
   final bool enabled;
   final VoidCallback onChanged;
   final VoidCallback onDiscard;
@@ -2893,7 +2843,6 @@ class _CardImportDraftCard extends StatelessWidget {
     required this.draft,
     required this.members,
     required this.currentMemberId,
-    required this.money,
     required this.enabled,
     required this.onChanged,
     required this.onDiscard,
@@ -2917,6 +2866,12 @@ class _CardImportDraftCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final amount = double.tryParse(draft.amountController.text.trim().replaceAll('.', '').replaceAll(',', '.')) ?? 0;
+    final amountInCents = (amount * 100).round();
+    final previewMoney = NumberFormat.currency(
+      locale: 'es_AR',
+      symbol: r'$ ',
+      decimalDigits: amountInCents % 100 == 0 ? 0 : 2,
+    );
     final cardEnabled = enabled && !draft.sentToSharedDebt;
     return AppCard(
       padding: const EdgeInsets.all(14),
@@ -2953,7 +2908,7 @@ class _CardImportDraftCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      '${money.format(amount)} · ${_destinationLabel(draft.destination)} · confianza ${(draft.confidence * 100).round()}%${draft.installments == null || draft.installments!.isEmpty ? '' : ' · cuota ${draft.installments}'}',
+                      '${previewMoney.format(amount)} · ${_destinationLabel(draft.destination)} · confianza ${(draft.confidence * 100).round()}%${draft.installments == null || draft.installments!.isEmpty ? '' : ' · cuota ${draft.installments}'}',
                       style: const TextStyle(color: kPrimary, fontWeight: FontWeight.w900),
                     ),
                   ],
@@ -3005,9 +2960,7 @@ class _CardImportDraftCard extends StatelessWidget {
           const SizedBox(height: 10),
           DropdownButtonFormField<_CardImportDestination>(
             value: draft.destination,
-            items: _CardImportDestination.values
-                .map((destination) => DropdownMenuItem(value: destination, child: Text(_destinationLabel(destination))))
-                .toList(),
+            items: _CardImportDestination.values.map((destination) => DropdownMenuItem(value: destination, child: Text(_destinationLabel(destination)))).toList(),
             onChanged: cardEnabled
                 ? (value) {
                     draft.destination = value ?? draft.destination;
@@ -3068,9 +3021,7 @@ class _CardImportDraftCard extends StatelessWidget {
                       child: Text(draft.destination == _CardImportDestination.owedToMe ? 'Debe ${member.name}' : 'Pagó ${member.name}'),
                     ))
                 .toList(),
-            onChanged: cardEnabled &&
-                    draft.selected &&
-                    (draft.destination == _CardImportDestination.common || draft.destination == _CardImportDestination.owedToMe)
+            onChanged: cardEnabled && draft.selected && (draft.destination == _CardImportDestination.common || draft.destination == _CardImportDestination.owedToMe)
                 ? (value) {
                     draft.paidByMemberId = value ?? draft.paidByMemberId;
                     onChanged();
@@ -3338,9 +3289,7 @@ class _MemberSummaryCard extends StatelessWidget {
               children: [
                 Text(member.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
                 Text(
-                  member.participates
-                      ? 'Ingreso declarado: $incomeLabel · $percent% del ingreso · pagó ${money.format(member.actuallyPaid)}'
-                      : 'No participa este mes · pagó ${money.format(member.actuallyPaid)}',
+                  member.participates ? 'Ingreso declarado: $incomeLabel · $percent% del ingreso · pagó ${money.format(member.actuallyPaid)}' : 'No participa este mes · pagó ${money.format(member.actuallyPaid)}',
                   style: TextStyle(color: missingIncome ? kWarning : Colors.black54, fontWeight: missingIncome ? FontWeight.w800 : FontWeight.normal),
                 ),
                 const SizedBox(height: 6),

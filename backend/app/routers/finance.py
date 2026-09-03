@@ -67,6 +67,42 @@ router = APIRouter(prefix="/finance", tags=["finance"])
 
 _CARD_IMPORT_MAX_BYTES = 8 * 1024 * 1024
 
+_CARD_MONTHS = {
+    "jan": 1, "ene": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4, "abr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8, "ago": 8,
+    "sep": 9, "set": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12, "dic": 12,
+}
+_CARD_DATE_TOKEN = r"\d{1,2}[/-](?:\d{1,2}|[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3,9})(?:[/-]\d{2,4})?"
+_CARD_EXPLICIT_DATE_RE = re.compile(
+    r"\b(\d{1,2}[/-](?:\d{1,2}|[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3,9})[/-]\d{2,4})\b",
+    re.I,
+)
+_CARD_AMOUNT_TOKEN = r"(?:\$\s*)?-?\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|-?\d+(?:,\d{2})"
+_CARD_ROW_RE = re.compile(
+    rf"^\s*(?P<date>{_CARD_DATE_TOKEN})\s+(?P<body>.+?)\s+"
+    rf"(?P<receipt>\d{{3,12}})\s+(?P<amount>{_CARD_AMOUNT_TOKEN})(?=\s|$)",
+    re.I,
+)
+_CARD_SECTION_RE = re.compile(
+    r'\b(?:cuotas?\s+del\s+mes|debitos?\s+automaticos?|compras?\s+del\s+mes)\b',
+    re.I,
+)
+_CARD_DETAIL_HEADER_RE = re.compile(r'\bdetalle\s+del\s+consumo\b', re.I)
+_CARD_DETAIL_END_RE = re.compile(
+    r'\b(?:total\s+adicional|total\s+a\s+pagar|cuotas\s+a\s+vencer|'
+    r'opciones\s+de\s+financiacion|informacion\s+institucional|informacion\s+de\s+la\s+entidad)\b',
+    re.I,
+)
+
 
 def _parse_card_amount(raw: str) -> float | None:
     value = raw.strip()
@@ -85,12 +121,12 @@ def _parse_card_amount(raw: str) -> float | None:
         if len(parts) > 2:
             value = ''.join(parts)
     try:
-        amount = abs(float(value))
+        amount = float(value)
     except ValueError:
         return None
-    if amount <= 0:
+    if amount == 0:
         return None
-    return amount if not negative else amount
+    return -abs(amount) if negative else abs(amount)
 
 
 def _parse_card_date(raw: str, fallback_month: str | None = None) -> Date | None:
@@ -99,7 +135,10 @@ def _parse_card_date(raw: str, fallback_month: str | None = None) -> Date | None
         return None
     try:
         day = int(parts[0])
-        month = int(parts[1])
+        month_raw = _strip_card_accents(parts[1]).lower()
+        month = int(month_raw) if month_raw.isdigit() else _CARD_MONTHS.get(month_raw[:3], 0)
+        if month <= 0:
+            return None
         if len(parts) >= 3:
             year = int(parts[2])
             if year < 100:
@@ -164,206 +203,200 @@ def _strip_card_accents(value: str) -> str:
     return ''.join(char for char in normalized if not unicodedata.combining(char))
 
 
-def _normalize_card_description(description: str) -> str:
-    text = _strip_card_accents(description).lower()
-    text = re.sub(r'\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b', ' ', text)
-    text = re.sub(r'\b(?:ars|pesos|usd|u\$s|visa|mastercard|master|tarjeta|debito|credito)\b', ' ', text)
-    text = re.sub(r'\b(?:compra|consumo|establecimiento|comprobante|autorizacion|cuotas?|plan|nro|numero)\b', ' ', text)
-    text = re.sub(r'\b\d{3,}\b', ' ', text)
-    text = re.sub(r'[^a-z0-9]+', ' ', text)
-    tokens = [token for token in text.split() if len(token) > 1]
-    return ' '.join(tokens)[:96]
-
-
-def _descriptions_look_duplicated(left: str, right: str) -> bool:
-    if not left or not right:
-        return False
-    if left == right or left in right or right in left:
-        return True
-    left_tokens = set(left.split())
-    right_tokens = set(right.split())
-    if not left_tokens or not right_tokens:
-        return False
-    overlap = len(left_tokens & right_tokens)
-    return overlap >= 2 and overlap / min(len(left_tokens), len(right_tokens)) >= 0.75
-
-
-def _line_looks_like_transaction_start(line: str) -> bool:
-    if _looks_like_summary_line(line):
-        return False
-    has_date = re.search(r'^\s*\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b', line) is not None
-    has_amount = re.search(r'(?:\$\s*)?-?\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|-?\d+(?:,\d{2})', line) is not None
-    return has_date and has_amount
-
-
-def _line_windows(lines: list[str]) -> list[tuple[str, int, int]]:
-    windows: list[tuple[str, int, int]] = []
-    for index, line in enumerate(lines):
-        windows.append((line, index, 1))
-        if index + 1 < len(lines) and not _line_looks_like_transaction_start(lines[index + 1]):
-            windows.append((f'{line} {lines[index + 1]}', index, 2))
-            if index + 2 < len(lines) and not _line_looks_like_transaction_start(lines[index + 2]):
-                windows.append((f'{line} {lines[index + 1]} {lines[index + 2]}', index, 3))
-    return windows
-
-
-def _looks_like_summary_line(line: str) -> bool:
-    lower = line.lower()
-    summary_words = (
-        'total', 'saldo', 'pago minimo', 'pago mínimo', 'vencimiento', 'cierre',
-        'limite', 'límite', 'resumen', 'anterior', 'financiacion', 'financiación',
-        'interes', 'interés', 'iva', 'sellado', 'tna', 'tea', 'cft', 'disponible',
+def _looks_like_card_header(text: str) -> bool:
+    normalized = _strip_card_accents(text).lower()
+    header_words = (
+        'detalle del consumo', 'fecha referencia', 'comprobante', 'dolares',
+        'descripcion del consumo', 'movimientos de la tarjeta',
     )
-    movement_words = (
-        'compra', 'consumo', 'establecimiento', 'cuota', 'debito', 'débito',
-        'mercado', 'super', 'farmacia', 'ypf', 'shell', 'uber', 'cabify', 'rappi',
-        'pedidosya', 'transfer', 'spotify', 'netflix', 'personal pay', 'movistar',
-    )
-    if not any(word in lower for word in summary_words):
-        return False
-    if any(word in lower for word in movement_words):
-        return False
-    return True
+    return any(word in normalized for word in header_words)
 
 
-def _extract_installments(line: str) -> str | None:
-    patterns = [
-        r'cuotas?\s*(\d{1,2})\s*/\s*(\d{1,2})',
-        r'cuotas?\s*(\d{1,2})\s+de\s+(\d{1,2})',
-        r'\b(\d{1,2})\s*/\s*(\d{1,2})\b',
-    ]
-    lower = line.lower()
-    for pattern in patterns:
-        match = re.search(pattern, lower)
-        if match:
-            if '/' in match.group(0) and 'cuot' not in lower:
-                start = max(0, match.start() - 12)
-                end = min(len(lower), match.end() + 12)
-                if 'cuot' not in lower[start:end]:
-                    continue
-            return f'{match.group(1)}/{match.group(2)}'
-    return None
-
-
-def _description_from_card_line(line: str, date_match: re.Match[str] | None, amount_match: re.Match[str]) -> str:
-    without_amount = (line[:amount_match.start()] + ' ' + line[amount_match.end():]).strip()
-    if date_match:
-        # Recalcular sobre la cadena sin importe: alcanza para limpiar la fecha aunque el índice cambie levemente.
-        without_amount = re.sub(r'\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b', ' ', without_amount, count=1)
-    description = without_amount
-    description = re.sub(r'\b(?:ars|pesos|usd|u\$s)\b', ' ', description, flags=re.I)
-    description = re.sub(r'\b(?:cuotas?|plan)\s*\d{1,2}\s*(?:/|de)\s*\d{1,2}\b', ' ', description, flags=re.I)
-    description = re.sub(r'\b\d{3,}\b', ' ', description)
-    description = re.sub(r'\s+', ' ', description).strip(' -·|:;')
-    return description[:160] or 'Movimiento detectado'
-
-
-def _find_card_date_match(line: str, date_re: re.Pattern[str]) -> re.Match[str] | None:
-    matches = list(date_re.finditer(line))
+def _split_card_transaction_segments(line: str) -> list[str]:
+    """Separa movimientos que pypdf devolvio pegados en una misma linea."""
+    matches = list(_CARD_EXPLICIT_DATE_RE.finditer(line))
     if not matches:
-        return None
-    lower = line.lower()
-    for match in matches:
-        start = max(0, match.start() - 14)
-        end = min(len(lower), match.end() + 14)
-        if 'cuot' in lower[start:end]:
-            continue
-        parsed = _parse_card_date(match.group(1))
-        if parsed is not None:
-            return match
+        return [line]
+
+    if len(matches) == 1:
+        prefix = line[:matches[0].start()].strip()
+        if prefix and _looks_like_card_header(prefix):
+            return [line[matches[0].start():].strip()]
+        return [line]
+
+    segments: list[str] = []
+    prefix = line[:matches[0].start()].strip()
+    if prefix and not _looks_like_card_header(prefix):
+        segments.append(prefix)
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(line)
+        segment = line[match.start():end].strip()
+        if segment:
+            segments.append(segment)
+    return segments
+
+
+def _card_section_from_line(line: str) -> str | None:
+    normalized = _strip_card_accents(line).lower()
+    normalized = re.sub(r'\s+', ' ', normalized)
+    if re.search(r'\bcuotas?\s+del\s+mes\b', normalized):
+        return 'installments'
+    if re.search(r'\bdebitos?\s+automaticos?\b', normalized):
+        return 'automatic_debits'
+    if re.search(r'\bcompras?\s+del\s+mes\b', normalized):
+        return 'purchases'
     return None
 
 
-def _candidate_without_date(line: str, fallback_month: str | None) -> bool:
-    if not fallback_month:
-        return False
-    lower = line.lower()
-    movement_words = (
-        'compra', 'consumo', 'cuota', 'debito', 'débito', 'mercado', 'super',
-        'farmacia', 'restaurant', 'resto', 'bar ', 'cafe', 'cafÉ', 'uber', 'cabify',
-        'rappi', 'pedidosya', 'netflix', 'spotify', 'movistar', 'personal', 'telecom',
-        'edenor', 'edesur', 'aysa', 'ypf', 'shell', 'axion', 'carrefour', 'coto', 'jumbo',
+def _card_detail_rows(text: str) -> tuple[list[tuple[str, str]], bool]:
+    """Devuelve solamente filas fechadas dentro de las secciones de consumos."""
+    rows: list[tuple[str, str]] = []
+    in_detail = False
+    found_detail = False
+    section: str | None = None
+
+    for raw_line in text.splitlines():
+        line = _clean_card_line(raw_line)
+        if not line:
+            continue
+        normalized = _strip_card_accents(line)
+        events: list[tuple[int, int, str, int, str | None]] = []
+        for match in _CARD_DETAIL_HEADER_RE.finditer(normalized):
+            events.append((match.start(), 0, 'detail', match.end(), None))
+        for match in _CARD_DETAIL_END_RE.finditer(normalized):
+            events.append((match.start(), 1, 'end', match.end(), None))
+        for match in _CARD_SECTION_RE.finditer(normalized):
+            events.append((match.start(), 2, 'section', match.end(), _card_section_from_line(match.group(0))))
+        for match in _CARD_EXPLICIT_DATE_RE.finditer(normalized):
+            events.append((match.start(), 3, 'date', match.end(), None))
+        events.sort(key=lambda event: (event[0], event[1]))
+
+        for event_index, (start, _, event_type, _, event_section) in enumerate(events):
+            if event_type == 'detail':
+                in_detail = True
+                found_detail = True
+                continue
+            if event_type == 'end':
+                if in_detail:
+                    in_detail = False
+                    section = None
+                continue
+            if event_type == 'section':
+                if in_detail:
+                    section = event_section
+                continue
+            if event_type != 'date' or not in_detail or section is None:
+                continue
+
+            next_start = events[event_index + 1][0] if event_index + 1 < len(events) else len(line)
+            segment = line[start:next_start].strip()
+            if segment:
+                rows.append((section, segment))
+
+    return rows, found_detail
+
+
+def _card_row_currency(body: str) -> str:
+    # Galicia ubica estas filas en la columna DOLARES. La moneda entre paréntesis
+    # es la moneda del comercio, no necesariamente la moneda facturada.
+    foreign_detail = re.search(r'\(\s*[A-Z]{3}\s*,\s*[A-Z]{3}\s*,', body, re.I)
+    return 'USD' if foreign_detail else 'ARS'
+
+
+def _card_row_description(body: str, section: str) -> tuple[str, str | None]:
+    installments: str | None = None
+    if section in {'installments', 'unknown'}:
+        fraction = re.search(r'\b(\d{1,2})\s*/\s*(\d{1,2})\b', body)
+        if fraction:
+            current, total = int(fraction.group(1)), int(fraction.group(2))
+            if 1 <= current <= total <= 60:
+                installments = f'{current}/{total}'
+    description = re.sub(
+        rf'\(\s*[A-Z]{{3}}\s*,\s*[A-Z]{{3}}\s*,\s*(?:{_CARD_AMOUNT_TOKEN})\s*\)',
+        ' ',
+        body,
+        flags=re.I,
     )
-    return any(word in lower for word in movement_words)
+    if installments:
+        current, total = installments.split('/')
+        description = re.sub(
+            rf'\b0*{int(current)}\s*/\s*0*{int(total)}\b',
+            ' ',
+            description,
+            count=1,
+        )
+    description = re.sub(r'\s+', ' ', description).strip(' -·|:;')
+    return (description[:160] or 'Movimiento detectado', installments)
 
 
 def _detect_card_movements(text: str, fallback_month: str | None = None) -> tuple[list[CardImportPreviewItem], list[str]]:
     warnings: list[str] = []
     items: list[CardImportPreviewItem] = []
-    date_re = re.compile(r'\b(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b')
-    amount_re = re.compile(r'(?<!\d)(?:\$\s*)?-?\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|-?\d+(?:,\d{2})(?!\d)')
-    lines = [_clean_card_line(line) for line in text.splitlines()]
-    lines = [line for line in lines if len(line) >= 4]
-    seen: dict[tuple[str, int, str], list[str]] = {}
-    scanned = 0
-    skipped_summary = 0
-    skipped_invalid_amount = 0
-    skipped_duplicates = 0
-    skipped_mixed_windows = 0
-    without_date = 0
+    detail_rows, found_detail = _card_detail_rows(text)
+    if not found_detail:
+        # Compatibilidad segura con otros bancos: sin encabezado conocido sólo se
+        # consideran filas completas que comienzan con una fecha; nunca se unen
+        # líneas ni se inventa una fecha usando el mes elegido en la app.
+        detail_rows = [
+            ('unknown', segment)
+            for raw_line in text.splitlines()
+            for segment in _split_card_transaction_segments(_clean_card_line(raw_line))
+            if re.match(rf'^\s*{_CARD_DATE_TOKEN}\b', segment, re.I)
+        ]
+        if detail_rows:
+            warnings.append('No se reconocieron los límites de la tabla del resumen; se muestran sólo filas completas con fecha para revisión manual.')
 
-    for line, index, window_size in _line_windows(lines):
-        if len(line) < 8:
+    seen: set[tuple[str, str, int, str, str]] = set()
+    skipped_malformed = 0
+    skipped_foreign = 0
+    skipped_credits = 0
+    skipped_exact_duplicates = 0
+
+    for section, line in detail_rows:
+        match = _CARD_ROW_RE.match(line)
+        if match is None:
+            skipped_malformed += 1
             continue
-        scanned += 1
-        if _looks_like_summary_line(line):
-            skipped_summary += 1
+        parsed_date = _parse_card_date(match.group('date'), fallback_month)
+        amount = _parse_card_amount(match.group('amount'))
+        if parsed_date is None or amount is None:
+            skipped_malformed += 1
             continue
-        date_match = _find_card_date_match(line, date_re)
-        amount_matches = list(amount_re.finditer(line))
-        if not amount_matches:
+        if amount < 0:
+            skipped_credits += 1
             continue
-        if window_size > 1:
-            valid_dates = [match for match in date_re.finditer(line) if _parse_card_date(match.group(1), fallback_month) is not None]
-            if len(valid_dates) >= 2 and len(amount_matches) >= 2:
-                # Una ventana que une dos líneas completas suele mezclar dos consumos distintos.
-                # En ese caso se conserva cada línea por separado y se descarta esta combinación.
-                skipped_mixed_windows += 1
-                continue
-        if not date_match and not _candidate_without_date(line, fallback_month):
-            without_date += 1
+
+        body = match.group('body').strip()
+        currency = _card_row_currency(body)
+        if currency != 'ARS':
+            skipped_foreign += 1
             continue
-        amount_match = amount_matches[-1]
-        amount = _parse_card_amount(amount_match.group(0))
-        if amount is None:
-            skipped_invalid_amount += 1
+
+        description, installments = _card_row_description(body, section)
+        receipt = match.group('receipt')
+        identity = (
+            parsed_date.isoformat(),
+            receipt,
+            int(round(amount * 100)),
+            currency,
+            section,
+        )
+        if identity in seen:
+            skipped_exact_duplicates += 1
             continue
-        parsed_date = _parse_card_date(date_match.group(1), fallback_month) if date_match else None
-        description = _description_from_card_line(line, date_match, amount_match)
-        if _looks_like_summary_line(description):
-            skipped_summary += 1
-            continue
-        installments = _extract_installments(line)
-        normalized_description = _normalize_card_description(description)
-        date_key = parsed_date.isoformat() if parsed_date else f"{fallback_month or ''}-sin-fecha-{index}"
-        amount_cents = int(round(amount * 100))
-        duplicate_key = (date_key, amount_cents, installments or '')
-        related_descriptions = seen.setdefault(duplicate_key, [])
-        if any(_descriptions_look_duplicated(existing, normalized_description) for existing in related_descriptions):
-            skipped_duplicates += 1
-            continue
-        related_descriptions.append(normalized_description)
-        observation: str | None = None
-        confidence = 0.74 if parsed_date else 0.52
-        if date_match is None:
-            observation = 'Fecha no detectada: se usará el primer día del mes en la app si lo importás sin corregir.'
-        if len(amount_matches) > 1:
-            confidence -= 0.06
-            observation = observation or 'La línea tenía más de un importe; se tomó el último como monto del movimiento.'
-        if installments:
-            confidence += 0.04
-        if '$' in amount_match.group(0) or 'ars' in line.lower():
-            confidence += 0.06
+        seen.add(identity)
+
+        confidence = 0.94 if found_detail and section != 'unknown' else 0.78
         items.append(
             CardImportPreviewItem(
                 date=parsed_date,
                 description=description,
                 amount=round_money(amount),
-                currency='ARS',
+                currency=currency,
                 category=_guess_card_category(description),
-                confidence=max(0.35, min(confidence, 0.94)),
+                confidence=confidence,
                 installments=installments,
-                observation=observation,
+                observation=None,
                 raw_text=line[:300],
             )
         )
@@ -371,24 +404,29 @@ def _detect_card_movements(text: str, fallback_month: str | None = None) -> tupl
             warnings.append('Se muestran los primeros 180 movimientos detectados para mantener la vista previa liviana.')
             break
 
-    if not items and text.strip():
+    if not items and detail_rows and (skipped_foreign or skipped_credits):
+        warnings.append('No quedaron gastos positivos en pesos para importar después de aplicar los controles de moneda y devoluciones.')
+    elif not items and text.strip():
         warnings.append('No se detectaron movimientos con el formato esperado. El resumen puede tener columnas no compatibles todavía.')
     else:
         item_suffix = '' if len(items) == 1 else 's'
         warnings.append(f'Se detectaron {len(items)} movimiento{item_suffix} candidato{item_suffix} para revisar antes de importar.')
-        if skipped_summary:
-            summary_suffix = '' if skipped_summary == 1 else 's'
-            warnings.append(f'Se omitieron {skipped_summary} línea{summary_suffix} que parecían totales, saldos, vencimientos o datos del resumen.')
-        if skipped_mixed_windows:
-            mixed_suffix = '' if skipped_mixed_windows == 1 else 'es'
-            warnings.append(f'Se descartaron {skipped_mixed_windows} combinación{mixed_suffix} de líneas que parecían mezclar consumos distintos.')
-        if skipped_duplicates:
-            duplicate_suffix = '' if skipped_duplicates == 1 else 's'
-            warnings.append(f'Se ocultaron {skipped_duplicates} posible{duplicate_suffix} duplicado{duplicate_suffix} por fecha, monto, cuota y descripción similar.')
-        if without_date:
-            warnings.append('Algunas líneas con importe no se mostraron porque no tenían fecha ni señales claras de consumo.')
-        if skipped_invalid_amount:
-            warnings.append('Algunas líneas fueron omitidas porque el monto no pudo interpretarse con seguridad.')
+    if skipped_foreign:
+        label = 'consumo facturado' if skipped_foreign == 1 else 'consumos facturados'
+        verb = 'Se omitió' if skipped_foreign == 1 else 'Se omitieron'
+        warnings.append(f'{verb} {skipped_foreign} {label} en moneda extranjera para evitar cargarlos como pesos.')
+    if skipped_credits:
+        label = 'devolución o crédito' if skipped_credits == 1 else 'devoluciones o créditos'
+        verb = 'Se omitió' if skipped_credits == 1 else 'Se omitieron'
+        warnings.append(f'{verb} {skipped_credits} {label} con importe negativo; no se convertirán en gastos positivos.')
+    if skipped_malformed:
+        label = 'fila fechada' if skipped_malformed == 1 else 'filas fechadas'
+        verb = 'Se omitió' if skipped_malformed == 1 else 'Se omitieron'
+        warnings.append(f'{verb} {skipped_malformed} {label} cuyo formato no pudo interpretarse con seguridad.')
+    if skipped_exact_duplicates:
+        label = 'fila exactamente repetida' if skipped_exact_duplicates == 1 else 'filas exactamente repetidas'
+        verb = 'Se ocultó' if skipped_exact_duplicates == 1 else 'Se ocultaron'
+        warnings.append(f'{verb} {skipped_exact_duplicates} {label}, incluyendo su número de comprobante.')
     return items, warnings
 
 def _month_add(year: int, month: int, delta: int) -> tuple[int, int]:
