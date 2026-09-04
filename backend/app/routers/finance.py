@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import unicodedata
 from io import BytesIO
@@ -6,6 +7,7 @@ from types import SimpleNamespace
 from datetime import date as Date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlmodel import Session, select
+from sqlalchemy import update
 from ..database import get_session
 from ..models import (
     CreditBalance,
@@ -1667,6 +1669,79 @@ def list_credit_balances(
         query = query.where(CreditBalance.status == CreditBalanceStatus.available, CreditBalance.remaining_amount > 0.01)
     rows = session.exec(query.order_by(CreditBalance.created_at.desc(), CreditBalance.id.desc())).all()
     return [credit_to_read(row) for row in rows]
+
+
+@router.post("/credit-balances/apply", response_model=DebtRead)
+def apply_available_credit(
+    payload: CreditBalanceApply,
+    current_member: Member = Depends(get_current_member),
+    session: Session = Depends(get_session),
+):
+    """Consume the owner's compatible credits oldest first, in one transaction."""
+    try:
+        debt = session.exec(select(Debt).where(
+            Debt.id == payload.debt_id,
+            Debt.household_id == current_member.household_id,
+        ).with_for_update()).first()
+        if debt is None:
+            raise HTTPException(404, "Deuda no encontrada")
+        if debt.debtor_member_id != current_member.id:
+            raise HTTPException(403, "Solo el titular del saldo puede aplicarlo a su deuda")
+        if debt.status not in {DebtStatus.active, DebtStatus.partial}:
+            raise HTTPException(400, "La deuda ya no está activa")
+        if not math.isfinite(payload.amount):
+            raise HTTPException(400, "Ingresá un monto válido")
+        amount = round_money(payload.amount)
+        remaining = debt_to_read(session, debt).remaining_amount
+        rows = session.exec(select(CreditBalance).where(
+            CreditBalance.household_id == current_member.household_id,
+            CreditBalance.owner_member_id == current_member.id,
+            CreditBalance.counterparty_member_id == debt.creditor_member_id,
+            CreditBalance.status == CreditBalanceStatus.available,
+            CreditBalance.remaining_amount > 0.01,
+        ).order_by(CreditBalance.created_at, CreditBalance.id).with_for_update()).all()
+        available = round_money(sum(row.remaining_amount for row in rows))
+        if amount <= 0 or amount > min(available, remaining):
+            raise HTTPException(409, "El saldo o la deuda cambió. Actualizá y revisá el monto disponible")
+        left = amount
+        for credit in rows:
+            if left <= 0:
+                break
+            before = credit.remaining_amount
+            part = round_money(min(left, before))
+            if part <= 0:
+                continue
+            after = round_money(before - part)
+            # Compare-and-swap also protects SQLite, where FOR UPDATE is ignored.
+            changed = session.execute(update(CreditBalance).where(
+                CreditBalance.id == credit.id,
+                CreditBalance.remaining_amount == before,
+                CreditBalance.status == CreditBalanceStatus.available,
+            ).values(remaining_amount=after,
+                     status=CreditBalanceStatus.applied if after == 0 else CreditBalanceStatus.available,
+                     updated_at=datetime.now(timezone.utc)))
+            if changed.rowcount != 1:
+                raise HTTPException(409, "El saldo cambió durante la operación. Actualizá antes de reintentar")
+            session.add(DebtPayment(
+                debt_id=debt.id, household_id=current_member.household_id,
+                paid_by_member_id=current_member.id, received_by_member_id=debt.creditor_member_id,
+                amount=part, applied_amount=part, credit_amount=0,
+                status=PaymentStatus.confirmed, date=datetime.now(timezone.utc).date(),
+                note=f"Aplicado desde saldo a favor #{credit.id}" + (f" · {payload.note.strip()}" if payload.note.strip() else ""),
+                confirmed_by_member_id=debt.creditor_member_id,
+                confirmed_at=datetime.now(timezone.utc),
+            ))
+            left = round_money(left - part)
+        if left != 0:
+            raise HTTPException(409, "No se pudo completar la aplicación del saldo")
+        session.flush()
+        sync_debt_status(session, debt)
+        session.commit()
+        session.refresh(debt)
+        return debt_to_read(session, debt)
+    except Exception:
+        session.rollback()
+        raise
 
 
 @router.post("/credit-balances/{credit_id}/apply", response_model=CreditBalanceRead)

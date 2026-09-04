@@ -8,6 +8,8 @@ from sqlmodel import SQLModel, Session, create_engine, select
 from app.models import (
     CreditBalance,
     Debt,
+    DebtPayment,
+    CreditBalanceStatus,
     DebtStatus,
     Expense,
     Household,
@@ -22,6 +24,7 @@ from app.routers.finance import (
     _sync_all_advance_credits,
     _sync_monthly_advance_allocations,
     apply_credit_balance,
+    apply_available_credit,
     close_month,
     create_automatic_debts_from_summary,
     create_manual_debt,
@@ -237,3 +240,72 @@ def test_uninvolved_member_cannot_create_debt_for_other_people():
 
         assert exc.value.status_code == 403
         assert session.exec(select(Debt)).all() == []
+
+
+def seed_credit_pool(session):
+    household, payer, receiver = seed_household(session)
+    debt = Debt(household_id=household.id, debtor_member_id=payer.id,
+                creditor_member_id=receiver.id, original_amount=100.25,
+                reason="Pool test")
+    session.add(debt)
+    credits = [CreditBalance(household_id=household.id, owner_member_id=payer.id,
+        counterparty_member_id=receiver.id, original_amount=amount,
+        remaining_amount=amount) for amount in (40.10, 80.15)]
+    session.add_all(credits)
+    session.commit()
+    return payer, receiver, debt, credits
+
+
+def test_credit_pool_partial_then_full_payment_keeps_source_trace():
+    with new_session() as session:
+        payer, _, debt, credits = seed_credit_pool(session)
+        result = apply_available_credit(CreditBalanceApply(debt_id=debt.id, amount=60.25), payer, session)
+        assert result.remaining_amount == 40
+        assert result.status == DebtStatus.partial
+        assert [session.get(CreditBalance, c.id).remaining_amount for c in credits] == [0, 60]
+        payments = session.exec(select(DebtPayment).order_by(DebtPayment.id)).all()
+        assert [p.applied_amount for p in payments] == [40.10, 20.15]
+        assert f"#{credits[0].id}" in payments[0].note
+        assert f"#{credits[1].id}" in payments[1].note
+        result = apply_available_credit(CreditBalanceApply(debt_id=debt.id, amount=40), payer, session)
+        assert result.status == DebtStatus.paid
+        assert result.remaining_amount == 0
+        assert session.get(CreditBalance, credits[1].id).remaining_amount == 20
+        with pytest.raises(HTTPException):
+            apply_available_credit(CreditBalanceApply(debt_id=debt.id, amount=40), payer, session)
+        assert len(session.exec(select(DebtPayment)).all()) == 3
+
+
+def test_credit_pool_rejects_excess_and_wrong_owner_without_changes():
+    with new_session() as session:
+        payer, receiver, debt, credits = seed_credit_pool(session)
+        for amount, actor in [(101, payer), (20, receiver)]:
+            with pytest.raises(HTTPException):
+                apply_available_credit(CreditBalanceApply(debt_id=debt.id, amount=amount), actor, session)
+        assert [session.get(CreditBalance, c.id).remaining_amount for c in credits] == [40.10, 80.15]
+        assert session.exec(select(DebtPayment)).all() == []
+
+
+def test_credit_pool_excludes_other_counterparty():
+    with new_session() as session:
+        payer, receiver, debt, credits = seed_credit_pool(session)
+        credits[1].counterparty_member_id = payer.id
+        session.add(credits[1])
+        session.commit()
+        with pytest.raises(HTTPException):
+            apply_available_credit(CreditBalanceApply(debt_id=debt.id, amount=60), payer, session)
+        assert session.exec(select(DebtPayment)).all() == []
+        assert session.get(CreditBalance, credits[0].id).remaining_amount == 40.10
+
+
+def test_credit_pool_rolls_back_every_source_on_commit_failure(monkeypatch):
+    with new_session() as session:
+        payer, _, debt, credits = seed_credit_pool(session)
+        def fail_commit():
+            raise RuntimeError("simulated storage failure")
+        monkeypatch.setattr(session, "commit", fail_commit)
+        with pytest.raises(RuntimeError):
+            apply_available_credit(CreditBalanceApply(debt_id=debt.id, amount=100.25), payer, session)
+        assert [session.get(CreditBalance, c.id).remaining_amount for c in credits] == [40.10, 80.15]
+        assert session.exec(select(DebtPayment)).all() == []
+        assert session.get(Debt, debt.id).status == DebtStatus.active

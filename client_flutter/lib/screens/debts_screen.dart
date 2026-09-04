@@ -28,9 +28,9 @@ class DebtsScreen extends StatefulWidget {
 
 class _DebtsScreenState extends State<DebtsScreen> {
   final money =
-      NumberFormat.currency(locale: 'es_AR', symbol: r'$ ', decimalDigits: 0);
+      NumberFormat.currency(locale: 'es_AR', symbol: r'$ ', decimalDigits: 2);
   bool loading = true;
-  bool includeCancelled = false;
+  bool showHistory = false;
   String? error;
   List<DebtItem> debts = [];
   List<CreditBalanceItem> credits = [];
@@ -48,15 +48,16 @@ class _DebtsScreenState extends State<DebtsScreen> {
     });
     try {
       final loaded =
-          await widget.api.getDebts(includeCancelled: includeCancelled);
+          await widget.api.getDebts(includeCancelled: true);
       final loadedCredits =
           await widget.api.getCreditBalances(activeOnly: true);
+      if (!mounted) return;
       setState(() {
         debts = loaded;
         credits = loadedCredits;
       });
     } catch (e) {
-      setState(() => error = friendlyMessage(e));
+      if (mounted) setState(() => error = friendlyMessage(e));
     } finally {
       if (mounted) setState(() => loading = false);
     }
@@ -128,6 +129,10 @@ class _DebtsScreenState extends State<DebtsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final visibleDebts = debts.where((debt) {
+      final archived = debt.status == 'paid' || debt.status == 'cancelled';
+      return showHistory ? archived : !archived;
+    }).toList();
     final activeTotal = debts
         .where((d) => d.status == 'active' || d.status == 'partial')
         .fold<double>(0, (sum, debt) => sum + debt.remainingAmount);
@@ -136,9 +141,14 @@ class _DebtsScreenState extends State<DebtsScreen> {
     final myCredits = credits
         .where((c) =>
             c.ownerMemberId == widget.currentMemberId &&
+            c.status == 'available' &&
             c.remainingAmount > 0.01)
         .toList();
 
+    final creditGroups = <int, List<CreditBalanceItem>>{};
+    for (final credit in myCredits) {
+      creditGroups.putIfAbsent(credit.counterpartyMemberId, () => []).add(credit);
+    }
     return Scaffold(
       extendBody: true,
       appBar: AppBar(
@@ -213,12 +223,9 @@ class _DebtsScreenState extends State<DebtsScreen> {
                       ),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
-                      value: includeCancelled,
-                      onChanged: (value) async {
-                        setState(() => includeCancelled = value);
-                        await _refresh();
-                      },
-                      title: const Text('Mostrar deudas canceladas',
+                      value: showHistory,
+                      onChanged: (value) => setState(() => showHistory = value),
+                      title: const Text('Ver historial de deudas',
                           style: TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w800)),
@@ -231,25 +238,33 @@ class _DebtsScreenState extends State<DebtsScreen> {
                 ),
               ),
               const SizedBox(height: 14),
-              if (myCredits.isNotEmpty) ...[
+              if (!showHistory && myCredits.isNotEmpty) ...[
                 const SectionTitle(
                     title: 'Saldos a favor',
                     subtitle:
                         'Créditos confirmados que podés conservar o aplicar a deudas compatibles.',
                     icon: Icons.savings_outlined),
-                for (final credit in myCredits) ...[
+                for (final group in creditGroups.values) ...[
                   Builder(
                     builder: (context) {
+                      final credit = group.first;
+                      final total = group.fold<double>(0, (sum, item) => sum + item.remainingAmount);
                       final eligibleDebts = _eligibleDebtsForCredit(credit);
-                      return _CreditBalanceCard(
+                      return Column(children: [_CreditBalanceCard(
                         title:
-                            '${money.format(credit.remainingAmount)} a favor con ${_memberName(credit.counterpartyMemberId)}',
-                        reason: credit.reason,
+                            '${money.format(total)} a favor con ${_memberName(credit.counterpartyMemberId)}',
+                        reason: 'Saldo disponible total. Se usarán primero los créditos más antiguos.',
                         compatibleDebtCount: eligibleDebts.length,
                         onApply: eligibleDebts.isEmpty
                             ? null
-                            : () => _showApplyCreditSheet(credit),
-                      );
+                            : () => _showApplyCreditSheet(group),
+                      ), ExpansionTile(
+                        title: Text('Ver detalle (${group.length} créditos)'),
+                        children: [for (final item in group) ListTile(
+                          title: Text('Crédito #${item.id} · ${money.format(item.remainingAmount)}'),
+                          subtitle: Text(item.reason),
+                        )],
+                      )]);
                     },
                   ),
                   const SizedBox(height: 10),
@@ -261,13 +276,20 @@ class _DebtsScreenState extends State<DebtsScreen> {
                     child: Padding(
                         padding: EdgeInsets.all(40),
                         child: CircularProgressIndicator())),
-              if (!loading && debts.isEmpty)
-                const EmptyState(
+              SectionTitle(
+                  title: showHistory ? 'Historial de deudas' : 'Deudas pendientes',
+                  subtitle: showHistory
+                      ? 'Saldadas y canceladas. Conservan sus abonos y confirmaciones.'
+                      : 'Las deudas pasan al historial cuando el pago queda confirmado.',
+                  icon: showHistory ? Icons.history : Icons.handshake_outlined),
+              if (!loading && visibleDebts.isEmpty)
+                EmptyState(
                     icon: Icons.handshake_outlined,
-                    title: 'Sin deudas registradas',
-                    message:
-                        'Podés crear una deuda manual o registrar el ajuste proporcional del mes.'),
-              for (final debt in debts) ...[
+                    title: showHistory ? 'Sin deudas en el historial' : 'Sin deudas pendientes',
+                    message: showHistory
+                        ? 'Las deudas saldadas o canceladas aparecerán aquí.'
+                        : 'Podés consultar las deudas anteriores en el historial.'),
+              for (final debt in visibleDebts) ...[
                 _DebtCard(
                   debt: debt,
                   money: money,
@@ -418,14 +440,14 @@ class _DebtsScreenState extends State<DebtsScreen> {
 
   Future<void> _showPaymentSheet(DebtItem debt) async {
     final amountController =
-        TextEditingController(text: debt.remainingAmount.toStringAsFixed(0));
+        TextEditingController(text: debt.remainingAmount.toStringAsFixed(2).replaceAll('.', ','));
     final noteController = TextEditingController();
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       isDismissible: false,
       enableDrag: false,
-      builder: (_) => Padding(
+      builder: (sheetContext) => SingleChildScrollView(child: Padding(
         padding: EdgeInsets.only(
             left: 18,
             right: 18,
@@ -435,9 +457,7 @@ class _DebtsScreenState extends State<DebtsScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Registrar abono a ${_memberName(debt.creditorMemberId)}',
-                style:
-                    const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+            _sheetTitle(sheetContext, 'Registrar abono a ${_memberName(debt.creditorMemberId)}'),
             const SizedBox(height: 8),
             Text('Saldo pendiente: ${money.format(debt.remainingAmount)}'),
             const SizedBox(height: 6),
@@ -456,7 +476,7 @@ class _DebtsScreenState extends State<DebtsScreen> {
                 decoration: const InputDecoration(labelText: 'Nota opcional')),
             const SizedBox(height: 16),
             TextButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.pop(sheetContext),
                 child: const Text('Cancelar')),
             const SizedBox(height: 8),
             ElevatedButton(
@@ -468,7 +488,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
                     note: noteController.text.trim(),
                     date: DateTime.now(),
                   );
-                  if (mounted) Navigator.pop(context);
+                  if (sheetContext.mounted) Navigator.pop(sheetContext);
+                  if (!mounted) return;
                   await _refresh();
                   if (widget.onChanged != null) await widget.onChanged!();
                   if (mounted)
@@ -485,9 +506,18 @@ class _DebtsScreenState extends State<DebtsScreen> {
             ),
           ],
         ),
-      ),
+      )),
     );
   }
+
+  Widget _sheetTitle(BuildContext sheetContext, String title, {bool enabled = true}) => Row(
+    children: [
+      Expanded(child: Text(title,
+          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold))),
+      IconButton(tooltip: 'Cerrar', icon: const Icon(Icons.close),
+          onPressed: enabled ? () => Navigator.pop(sheetContext) : null),
+    ],
+  );
 
   Future<void> _showPayments(DebtItem debt) async {
     try {
@@ -591,6 +621,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
   }
 
   List<DebtItem> _eligibleDebtsForCredit(CreditBalanceItem credit) {
+    if (credit.status != 'available' || credit.remainingAmount <= 0.01 ||
+        credit.ownerMemberId != widget.currentMemberId) return [];
     return debts
         .where((d) =>
             (d.status == 'active' || d.status == 'partial') &&
@@ -600,7 +632,10 @@ class _DebtsScreenState extends State<DebtsScreen> {
         .toList();
   }
 
-  Future<void> _showApplyCreditSheet(CreditBalanceItem credit) async {
+  Future<void> _showApplyCreditSheet(List<CreditBalanceItem> sources) async {
+    final credit = sources.first;
+    final available = sources.fold<double>(0, (sum, item) => sum + item.remainingAmount);
+    var submitting = false;
     final eligible = _eligibleDebtsForCredit(credit);
     if (eligible.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -612,16 +647,16 @@ class _DebtsScreenState extends State<DebtsScreen> {
     }
     DebtItem selected = eligible.first;
     final amountController = TextEditingController(
-        text: credit.remainingAmount
+        text: available
             .clamp(0, selected.remainingAmount)
-            .toStringAsFixed(0));
+            .toStringAsFixed(2).replaceAll('.', ','));
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       isDismissible: false,
       enableDrag: false,
       builder: (_) => StatefulBuilder(
-        builder: (context, setModalState) => Padding(
+        builder: (context, setModalState) => PopScope(canPop: !submitting, child: SingleChildScrollView(child: Padding(
           padding: EdgeInsets.only(
               left: 18,
               right: 18,
@@ -631,11 +666,10 @@ class _DebtsScreenState extends State<DebtsScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Aplicar saldo a favor',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              _sheetTitle(context, 'Aplicar saldo a favor', enabled: !submitting),
               const SizedBox(height: 8),
               Text(
-                'Disponible: ${money.format(credit.remainingAmount)}. Podés usarlo total o parcialmente para compensar una deuda activa con ${_memberName(credit.counterpartyMemberId)}.',
+                'Disponible: ${money.format(available)}. Podés usarlo total o parcialmente para compensar una deuda activa con ${_memberName(credit.counterpartyMemberId)}.',
                 style: const TextStyle(color: Colors.black54, height: 1.25),
               ),
               const SizedBox(height: 14),
@@ -649,12 +683,12 @@ class _DebtsScreenState extends State<DebtsScreen> {
                         ))
                     .toList(),
                 onChanged: (value) {
-                  if (value == null) return;
+                  if (value == null || submitting) return;
                   setModalState(() {
                     selected = value;
-                    amountController.text = credit.remainingAmount
+                    amountController.text = available
                         .clamp(0, selected.remainingAmount)
-                        .toStringAsFixed(0);
+                        .toStringAsFixed(2).replaceAll('.', ',');
                   });
                 },
                 decoration:
@@ -667,25 +701,26 @@ class _DebtsScreenState extends State<DebtsScreen> {
                 decoration: InputDecoration(
                   labelText: 'Monto a aplicar',
                   helperText:
-                      'Máximo: ${money.format(credit.remainingAmount.clamp(0, selected.remainingAmount))}',
+                      'Máximo: ${money.format(available.clamp(0, selected.remainingAmount))}',
                 ),
               ),
               const SizedBox(height: 16),
               TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: submitting ? null : () => Navigator.pop(context),
                   child: const Text('Cancelar')),
               const SizedBox(height: 8),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
                   icon: const Icon(Icons.swap_horiz_rounded),
-                  onPressed: () async {
+                  onPressed: submitting ? null : () async {
+                    setModalState(() => submitting = true);
                     try {
                       final amount = _parseMoney(amountController.text);
-                      final maxAmount = credit.remainingAmount
+                      final maxAmount = available
                           .clamp(0, selected.remainingAmount)
                           .toDouble();
-                      if (amount > maxAmount + 0.01) {
+                      if ((amount * 100).round() > (maxAmount * 100).round()) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                               content: Text(
@@ -693,27 +728,28 @@ class _DebtsScreenState extends State<DebtsScreen> {
                         );
                         return;
                       }
-                      await widget.api.applyCreditBalance(
-                        creditId: credit.id,
+                      await widget.api.applyAvailableCredit(
                         debtId: selected.id,
                         amount: amount,
-                        note: 'Compensación desde saldo a favor',
                       );
-                      if (mounted) Navigator.pop(context);
+                      if (context.mounted) Navigator.pop(context);
+                      if (!mounted) return;
                       await _refresh();
                       if (widget.onChanged != null) await widget.onChanged!();
                     } catch (e) {
                       if (mounted)
-                        ScaffoldMessenger.of(context).showSnackBar(
+                        ScaffoldMessenger.of(this.context).showSnackBar(
                             SnackBar(content: Text(friendlyMessage(e))));
+                    } finally {
+                      if (context.mounted) setModalState(() => submitting = false);
                     }
                   },
-                  label: const Text('Aplicar saldo'),
+                  label: Text(submitting ? 'Aplicando...' : 'Aplicar saldo'),
                 ),
               ),
             ],
           ),
-        ),
+        ))),
       ),
     );
   }

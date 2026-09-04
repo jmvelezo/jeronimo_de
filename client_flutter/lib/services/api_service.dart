@@ -579,6 +579,14 @@ class ApiService {
     if (response.statusCode != 200) throw Exception(_extractError(response));
   }
 
+  Future<void> applyAvailableCredit({required int debtId, required double amount}) async {
+    final response = await http.post(
+      _uri('/finance/credit-balances/apply'), headers: _headers,
+      body: jsonEncode({'debt_id': debtId, 'amount': amount}),
+    );
+    if (response.statusCode != 200) throw Exception(_extractError(response));
+  }
+
   Future<void> cancelDebt(int debtId, {String reason = ''}) async {
     final response = await http.patch(
       _uri('/finance/debts/$debtId/cancel'),
