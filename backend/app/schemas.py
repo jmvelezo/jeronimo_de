@@ -515,3 +515,16 @@ class AiWeeklyReportRead(BaseModel):
     tips: list[AiVisibleTip] = []
     generated_now: bool = False
     message: str
+
+
+class DashboardBootstrapRead(BaseModel):
+    month: str
+    active_period: HouseholdPeriodSettingsRead
+    members: list[MemberRead]
+    participation: list[MemberParticipationRead]
+    summary: MonthSummary
+    advance_payments: list[MonthlyAdvancePaymentRead]
+    credit_balances: list[CreditBalanceRead]
+    fixed_expenses: list[FixedExpenseTemplateRead]
+    task_summary: HouseholdTaskSummary
+    weekly_ai: AiWeeklyReportRead

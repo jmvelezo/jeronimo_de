@@ -9,3 +9,5 @@ build/
 .flutter-plugins-dependencies
 .packages
 .pub-cache/
+distribution/JeronimoDe_Windows/
+distribution/JeronimoDe_Windows.zip

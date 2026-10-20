@@ -807,9 +807,32 @@ def _locked_advance_allocations(
     advance_payments: list[MonthlyAdvancePayment],
 ) -> dict[int, tuple[float, float]]:
     """Congela un anticipo cuando su credito ya fue usado total o parcialmente."""
+    if not advance_payments:
+        return {}
+
+    # El resumen mensual puede contener varios anticipos. Antes se ejecutaba una
+    # consulta de saldos por cada uno (N+1). Cargarlos una vez mantiene la misma
+    # regla de vinculación y evita viajes repetidos a PostgreSQL.
+    household_id = advance_payments[0].household_id
+    all_credit_rows = session.exec(
+        select(CreditBalance).where(CreditBalance.household_id == household_id)
+    ).all()
+
     locked: dict[int, tuple[float, float]] = {}
     for payment in advance_payments:
-        rows = _credit_rows_for_advance(session, payment)
+        reason = _advance_credit_reason(payment)
+        marker = f"#{payment.id}"
+        rows = [
+            row
+            for row in all_credit_rows
+            if row.owner_member_id == payment.paid_by_member_id
+            and row.counterparty_member_id == payment.received_by_member_id
+            and (
+                row.source_advance_payment_id == payment.id
+                or row.reason == reason
+                or (marker in (row.reason or "") and "pago anticipado" in (row.reason or "").lower())
+            )
+        ]
         was_consumed = any(
             row.status != CreditBalanceStatus.available
             or round_money(row.remaining_amount) != round_money(row.original_amount)

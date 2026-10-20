@@ -68,72 +68,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
       error = null;
     });
     try {
-      await widget.api.getServerSyncStatus();
-      HouseholdPeriodSettingsItem? loadedPeriod;
-      try {
-        loadedPeriod = await widget.api.getActivePeriod();
-        if (loadedPeriod.activeMonth.isNotEmpty) month = loadedPeriod.activeMonth;
-      } catch (_) {
-        loadedPeriod = null;
-      }
-      final loadedMembers = await widget.api.getMembers();
-      final loadedParticipation = await widget.api.getParticipation(month);
-      final loadedSummary = await widget.api.getSummary(month);
-      List<MonthlyAdvancePaymentItem> loadedAdvancePayments = [];
-      try {
-        loadedAdvancePayments = await widget.api.getMonthlyAdvancePayments(month);
-      } catch (_) {
-        loadedAdvancePayments = [];
-      }
-      List<CreditBalanceItem> loadedCreditBalances = [];
-      try {
-        loadedCreditBalances = await widget.api.getCreditBalances(activeOnly: true);
-      } catch (_) {
-        loadedCreditBalances = [];
-      }
-      List<FixedExpenseTemplateItem> loadedFixedExpenseTemplates = [];
-      try {
-        loadedFixedExpenseTemplates = await widget.api.getFixedExpenses(activeOnly: true);
-      } catch (_) {
-        loadedFixedExpenseTemplates = [];
-      }
-      HouseholdTaskSummary? loadedTaskSummary;
-      try {
-        loadedTaskSummary = await widget.api.getTaskSummary();
-      } catch (_) {
-        loadedTaskSummary = null;
-      }
-      AiWeeklyReportResult? loadedWeeklyAi;
-      try {
-        loadedWeeklyAi = await widget.api.refreshWeeklyAiIfNeeded(month: month);
-      } catch (_) {
-        try {
-          loadedWeeklyAi = await widget.api.getLatestWeeklyAiReport();
-        } catch (_) {
-          loadedWeeklyAi = null;
-        }
-      }
+      final bootstrap = await widget.api.getDashboardBootstrap();
+      month = bootstrap.month;
       await syncStore.saveSharedSnapshot(
         serverUrl: widget.api.baseUrl,
         householdId: widget.session.household.id,
         month: month,
-        members: loadedMembers,
-        participation: loadedParticipation,
-        summary: loadedSummary,
-        taskSummary: loadedTaskSummary,
+        members: bootstrap.members,
+        participation: bootstrap.participation,
+        summary: bootstrap.summary,
+        taskSummary: bootstrap.taskSummary,
       );
       final last = await syncStore.lastSuccessfulSync();
       setState(() {
-        members = loadedMembers;
-        participation = loadedParticipation;
-        summary = loadedSummary;
-        taskSummary = loadedTaskSummary;
-        weeklyAi = loadedWeeklyAi;
-        weeklyAiMessage = loadedWeeklyAi?.message;
-        periodSettings = loadedPeriod;
-        advancePayments = loadedAdvancePayments;
-        creditBalances = loadedCreditBalances;
-        fixedExpenseTemplates = loadedFixedExpenseTemplates;
+        members = bootstrap.members;
+        participation = bootstrap.participation;
+        summary = bootstrap.summary;
+        taskSummary = bootstrap.taskSummary;
+        weeklyAi = bootstrap.weeklyAi;
+        weeklyAiMessage = bootstrap.weeklyAi.message;
+        periodSettings = bootstrap.activePeriod;
+        advancePayments = bootstrap.advancePayments;
+        creditBalances = bootstrap.creditBalances;
+        fixedExpenseTemplates = bootstrap.fixedExpenses;
         lastSuccessfulSync = last;
         offlineMode = false;
         syncMessage = "Sincronizado con el hogar compartido.";

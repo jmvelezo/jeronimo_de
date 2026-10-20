@@ -89,6 +89,35 @@ class ApiService {
     return Uri.parse('$clean$path').replace(queryParameters: query);
   }
 
+  /// Reintenta únicamente lecturas idempotentes cuando Railway está
+  /// despertando la aplicación. Nunca se usa para pagos ni escrituras.
+  Future<http.Response> _getWithWakeRetry(Uri uri) async {
+    Object? lastError;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final response = await http
+            .get(uri, headers: _headers)
+            .timeout(const Duration(seconds: 25));
+        final isTemporary = response.statusCode == 502 ||
+            response.statusCode == 503 ||
+            response.statusCode == 504;
+        if (!isTemporary || attempt == 2) return response;
+      } catch (error) {
+        lastError = error;
+        if (attempt == 2) rethrow;
+      }
+      await Future<void>.delayed(Duration(seconds: attempt == 0 ? 2 : 4));
+    }
+    throw StateError('No se pudo despertar el servidor: $lastError');
+  }
+
+  Future<DashboardBootstrapData> getDashboardBootstrap() async {
+    final response = await _getWithWakeRetry(_uri('/dashboard/bootstrap'));
+    if (response.statusCode != 200) throw Exception(_extractError(response));
+    return DashboardBootstrapData.fromJson(
+        (jsonDecode(response.body) as Map).cast<String, dynamic>());
+  }
+
   Future<SessionData> login(
       {required String householdCode,
       required String memberName,

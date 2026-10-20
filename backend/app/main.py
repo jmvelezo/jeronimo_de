@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .database import create_db_and_tables
-from .routers import ai, app_info, auth, backup, finance, household, tasks
+from .routers import ai, app_info, auth, backup, dashboard, finance, household, tasks
 
 settings = get_settings()
 
@@ -56,3 +56,4 @@ app.include_router(household.router)
 app.include_router(finance.router)
 app.include_router(tasks.router)
 app.include_router(ai.router)
+app.include_router(dashboard.router)

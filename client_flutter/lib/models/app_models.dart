@@ -898,3 +898,57 @@ class AiWeeklyReportResult {
         message: json['message'] ?? '',
       );
 }
+
+class DashboardBootstrapData {
+  final String month;
+  final HouseholdPeriodSettingsItem activePeriod;
+  final List<Member> members;
+  final List<MemberParticipationItem> participation;
+  final MonthSummary summary;
+  final List<MonthlyAdvancePaymentItem> advancePayments;
+  final List<CreditBalanceItem> creditBalances;
+  final List<FixedExpenseTemplateItem> fixedExpenses;
+  final HouseholdTaskSummary taskSummary;
+  final AiWeeklyReportResult weeklyAi;
+
+  const DashboardBootstrapData({
+    required this.month,
+    required this.activePeriod,
+    required this.members,
+    required this.participation,
+    required this.summary,
+    required this.advancePayments,
+    required this.creditBalances,
+    required this.fixedExpenses,
+    required this.taskSummary,
+    required this.weeklyAi,
+  });
+
+  factory DashboardBootstrapData.fromJson(Map<String, dynamic> json) {
+    List<T> readList<T>(String key, T Function(Map<String, dynamic>) decode) =>
+        ((json[key] as List?) ?? const [])
+            .map((item) => decode((item as Map).cast<String, dynamic>()))
+            .toList();
+
+    return DashboardBootstrapData(
+      month: json['month'] ?? '',
+      activePeriod: HouseholdPeriodSettingsItem.fromJson(
+          (json['active_period'] as Map).cast<String, dynamic>()),
+      members: readList('members', Member.fromJson),
+      participation:
+          readList('participation', MemberParticipationItem.fromJson),
+      summary: MonthSummary.fromJson(
+          (json['summary'] as Map).cast<String, dynamic>()),
+      advancePayments:
+          readList('advance_payments', MonthlyAdvancePaymentItem.fromJson),
+      creditBalances:
+          readList('credit_balances', CreditBalanceItem.fromJson),
+      fixedExpenses:
+          readList('fixed_expenses', FixedExpenseTemplateItem.fromJson),
+      taskSummary: HouseholdTaskSummary.fromJson(
+          (json['task_summary'] as Map).cast<String, dynamic>()),
+      weeklyAi: AiWeeklyReportResult.fromJson(
+          (json['weekly_ai'] as Map).cast<String, dynamic>()),
+    );
+  }
+}
